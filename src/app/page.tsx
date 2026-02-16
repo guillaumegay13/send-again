@@ -1,6 +1,14 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback, ChangeEvent } from "react";
+import {
+  useState,
+  useRef,
+  useEffect,
+  useCallback,
+  ChangeEvent,
+  FormEvent,
+} from "react";
+import { getBrowserSupabaseClient } from "@/lib/supabase-browser";
 
 type Tab = "compose" | "contacts" | "history" | "settings";
 
@@ -71,6 +79,16 @@ function parseCSV(text: string): Contact[] {
 }
 
 export default function ComposePage() {
+  const [authLoading, setAuthLoading] = useState(true);
+  const [sessionToken, setSessionToken] = useState<string | null>(null);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [authMode, setAuthMode] = useState<"sign-in" | "sign-up">("sign-in");
+  const [loginEmail, setLoginEmail] = useState("guillaume.gay@protonmail.com");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loggingIn, setLoggingIn] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authMessage, setAuthMessage] = useState<string | null>(null);
+
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -103,46 +121,201 @@ export default function ComposePage() {
   const settingsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const contactDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Fetch workspaces on mount
+  const authFetch = useCallback(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!sessionToken) {
+        throw new Error("Not authenticated");
+      }
+      const headers = new Headers(init?.headers ?? {});
+      headers.set("Authorization", `Bearer ${sessionToken}`);
+      return fetch(input, { ...init, headers });
+    },
+    [sessionToken]
+  );
+
+  const fetchJson = useCallback(
+    async <T,>(input: RequestInfo | URL, init?: RequestInit): Promise<T> => {
+      const res = await authFetch(input, init);
+      const payload = (await res.json().catch(() => null)) as
+        | { error?: string }
+        | null;
+      if (!res.ok) {
+        throw new Error(
+          payload?.error ?? `Request failed with status ${res.status}`
+        );
+      }
+      return payload as T;
+    },
+    [authFetch]
+  );
+
   useEffect(() => {
-    fetch("/api/workspaces")
-      .then((res) => res.json())
-      .then((data: Workspace[]) => {
-        if (data.length > 0) {
-          setWorkspaces(data);
-          setActiveId(data[0].id);
+    const supabase = getBrowserSupabaseClient();
+    let active = true;
+
+    supabase.auth
+      .getSession()
+      .then(({ data, error }) => {
+        if (!active) return;
+        if (error) {
+          setAuthError(error.message);
+          setSessionToken(null);
+          setUserEmail(null);
+        } else {
+          setAuthError(null);
+          setSessionToken(data.session?.access_token ?? null);
+          setUserEmail(data.session?.user.email?.toLowerCase() ?? null);
         }
       })
-      .catch(console.error)
-      .finally(() => setLoading(false));
+      .catch((error: unknown) => {
+        if (!active) return;
+        setAuthError(error instanceof Error ? error.message : String(error));
+        setSessionToken(null);
+        setUserEmail(null);
+      })
+      .finally(() => {
+        if (active) {
+          setAuthLoading(false);
+        }
+      });
+
+    const { data: authSubscription } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        if (!active) return;
+        setSessionToken(session?.access_token ?? null);
+        setUserEmail(session?.user.email?.toLowerCase() ?? null);
+      }
+    );
+
+    return () => {
+      active = false;
+      authSubscription.subscription.unsubscribe();
+    };
   }, []);
 
-  // Fetch contacts when workspace changes
   useEffect(() => {
-    if (!activeId) return;
+    if (!sessionToken) {
+      setLoading(false);
+      setWorkspaces([]);
+      setActiveId(null);
+      setContactsMap({});
+      setHistory([]);
+      return;
+    }
+
+    setLoading(true);
+    setAuthError(null);
+    fetchJson<Workspace[]>("/api/workspaces")
+      .then((data) => {
+        setWorkspaces(data);
+        setActiveId((current) => {
+          if (current && data.some((workspace) => workspace.id === current)) {
+            return current;
+          }
+          return data[0]?.id ?? null;
+        });
+      })
+      .catch((error: unknown) => {
+        console.error(error);
+        setAuthError(error instanceof Error ? error.message : String(error));
+        setWorkspaces([]);
+        setActiveId(null);
+      })
+      .finally(() => setLoading(false));
+  }, [sessionToken, fetchJson]);
+
+  useEffect(() => {
+    if (!sessionToken || !activeId) return;
     // Skip if we already have contacts loaded for this workspace
     if (contactsMap[activeId] !== undefined) return;
-    fetch(`/api/contacts?workspace=${encodeURIComponent(activeId)}`)
-      .then((res) => res.json())
-      .then((data: Contact[]) => {
+    fetchJson<Contact[]>(`/api/contacts?workspace=${encodeURIComponent(activeId)}`)
+      .then((data) => {
         setContactsMap((prev) => ({ ...prev, [activeId]: data }));
       })
       .catch(console.error);
-  }, [activeId, contactsMap]);
+  }, [sessionToken, activeId, contactsMap, fetchJson]);
 
-  // Fetch history when switching to history tab or workspace changes
   useEffect(() => {
+    if (!sessionToken) return;
     if (tab !== "history" || !activeId) return;
     setHistoryLoading(true);
-    fetch(`/api/history?workspace=${encodeURIComponent(activeId)}`)
-      .then((res) => res.json())
-      .then((data: HistoryItem[]) => setHistory(data))
+    fetchJson<HistoryItem[]>(`/api/history?workspace=${encodeURIComponent(activeId)}`)
+      .then((data) => setHistory(data))
       .catch(console.error)
       .finally(() => setHistoryLoading(false));
-  }, [tab, activeId]);
+  }, [sessionToken, tab, activeId, fetchJson]);
+
+  async function handleSignIn() {
+    setLoggingIn(true);
+    setAuthError(null);
+    setAuthMessage(null);
+    try {
+      const supabase = getBrowserSupabaseClient();
+      const { error } = await supabase.auth.signInWithPassword({
+        email: loginEmail.trim(),
+        password: loginPassword,
+      });
+      if (error) {
+        setAuthError(error.message);
+        return;
+      }
+      setLoginPassword("");
+    } finally {
+      setLoggingIn(false);
+    }
+  }
+
+  async function handleSignUp() {
+    setLoggingIn(true);
+    setAuthError(null);
+    setAuthMessage(null);
+    try {
+      const supabase = getBrowserSupabaseClient();
+      const { data, error } = await supabase.auth.signUp({
+        email: loginEmail.trim(),
+        password: loginPassword,
+      });
+      if (error) {
+        setAuthError(error.message);
+        return;
+      }
+
+      setLoginPassword("");
+      if (data.session) {
+        setAuthMessage("Account created and signed in.");
+        return;
+      }
+
+      setAuthMode("sign-in");
+      setAuthMessage("Account created. Confirm your email, then sign in.");
+    } finally {
+      setLoggingIn(false);
+    }
+  }
+
+  async function handleAuthSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (authMode === "sign-in") {
+      await handleSignIn();
+      return;
+    }
+    await handleSignUp();
+  }
+
+  async function handleSignOut() {
+    const supabase = getBrowserSupabaseClient();
+    await supabase.auth.signOut();
+    setSessionToken(null);
+    setUserEmail(null);
+    setAuthError(null);
+    setWorkspaces([]);
+    setActiveId(null);
+    setContactsMap({});
+    setHistory([]);
+  }
 
   function updateWorkspace(patch: Partial<Workspace>) {
-    if (!activeId || !workspace) return;
+    if (!activeId || !workspace || !sessionToken) return;
     const updated = { ...workspace, ...patch };
     setWorkspaces((prev) =>
       prev.map((w) => (w.id === activeId ? updated : w))
@@ -150,7 +323,7 @@ export default function ComposePage() {
     // Debounce persist to DB
     if (settingsDebounceRef.current) clearTimeout(settingsDebounceRef.current);
     settingsDebounceRef.current = setTimeout(() => {
-      fetch("/api/workspaces/settings", {
+      fetchJson<{ ok: boolean }>("/api/workspaces/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -173,7 +346,7 @@ export default function ComposePage() {
 
   async function addContact() {
     const email = newContact.trim();
-    if (!email || !activeId) return;
+    if (!sessionToken || !email || !activeId) return;
     if (contacts.some((c) => c.email === email)) {
       setNewContact("");
       return;
@@ -182,7 +355,7 @@ export default function ComposePage() {
     setLocalContacts(newList);
     setNewContact("");
     try {
-      await fetch("/api/contacts", {
+      await fetchJson<Contact[]>("/api/contacts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -196,10 +369,10 @@ export default function ComposePage() {
   }
 
   async function removeContact(email: string) {
-    if (!activeId) return;
+    if (!sessionToken || !activeId) return;
     setLocalContacts(contacts.filter((c) => c.email !== email));
     try {
-      await fetch(
+      await fetchJson<{ ok: boolean }>(
         `/api/contacts/${encodeURIComponent(email)}?workspace=${encodeURIComponent(activeId)}`,
         { method: "DELETE" }
       );
@@ -209,7 +382,7 @@ export default function ComposePage() {
   }
 
   function updateContactField(email: string, key: string, value: string) {
-    if (!activeId) return;
+    if (!sessionToken || !activeId) return;
     const contact = contacts.find((c) => c.email === email);
     if (!contact) return;
     const updatedFields = { ...contact.fields, [key]: value };
@@ -221,7 +394,7 @@ export default function ComposePage() {
     // Debounce API call for field edits
     if (contactDebounceRef.current) clearTimeout(contactDebounceRef.current);
     contactDebounceRef.current = setTimeout(() => {
-      fetch(`/api/contacts/${encodeURIComponent(email)}`, {
+      fetchJson<{ ok: boolean }>(`/api/contacts/${encodeURIComponent(email)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ workspace: activeId, fields: updatedFields }),
@@ -230,10 +403,10 @@ export default function ComposePage() {
   }
 
   async function clearContacts() {
-    if (!activeId) return;
+    if (!sessionToken || !activeId) return;
     setLocalContacts([]);
     try {
-      await fetch(
+      await fetchJson<{ ok: boolean }>(
         `/api/contacts?workspace=${encodeURIComponent(activeId)}`,
         { method: "DELETE" }
       );
@@ -244,7 +417,7 @@ export default function ComposePage() {
 
   async function handleCSVUpload(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    if (!file || !activeId) return;
+    if (!sessionToken || !file || !activeId) return;
     const reader = new FileReader();
     reader.onload = async () => {
       const parsed = parseCSV(reader.result as string);
@@ -253,12 +426,11 @@ export default function ComposePage() {
       const kept = contacts.filter((c) => !newEmails.has(c.email));
       setLocalContacts([...kept, ...parsed]);
       try {
-        const res = await fetch("/api/contacts", {
+        const updated = await fetchJson<Contact[]>("/api/contacts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ workspace: activeId, contacts: parsed }),
         });
-        const updated = await res.json();
         setContactsMap((prev) => ({ ...prev, [activeId]: updated }));
       } catch (err) {
         console.error("Failed to upload contacts:", err);
@@ -326,17 +498,30 @@ export default function ComposePage() {
     .filter(Boolean);
 
   async function handleSend() {
-    if (!workspace?.from || !recipients.length || !subject || !html) {
+    if (
+      !sessionToken ||
+      !workspace?.from ||
+      !workspace.id ||
+      !recipients.length ||
+      !subject ||
+      !html
+    ) {
       setResult("Fill in all fields.");
       return;
     }
     setSending(true);
     setResult(null);
     try {
-      const res = await fetch("/api/send", {
+      const data = await fetchJson<{
+        sent: number;
+        dryRun?: boolean;
+        errors?: number;
+        errorEmails?: string[];
+      }>("/api/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          workspaceId: workspace.id,
           from: workspace.from,
           to: recipients,
           subject,
@@ -346,13 +531,12 @@ export default function ComposePage() {
           rateLimit: workspace.rateLimit,
         }),
       });
-      const data = await res.json();
       if (data.dryRun) {
         setResult(`Dry run: ${data.sent} email(s) would be sent.`);
       } else {
         let msg = `Sent: ${data.sent}`;
-        if (data.errors > 0) {
-          msg += ` | Errors: ${data.errors} (${data.errorEmails.join(", ")})`;
+        if ((data.errors ?? 0) > 0) {
+          msg += ` | Errors: ${data.errors} (${(data.errorEmails ?? []).join(", ")})`;
         }
         setResult(msg);
       }
@@ -361,6 +545,121 @@ export default function ComposePage() {
     } finally {
       setSending(false);
     }
+  }
+
+  if (authLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center text-gray-400 text-sm">
+        Loading authentication...
+      </div>
+    );
+  }
+
+  if (!sessionToken) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-gray-50 px-4">
+        <form
+          onSubmit={handleAuthSubmit}
+          className="w-full max-w-sm rounded-lg border border-gray-200 bg-white p-6 shadow-sm"
+        >
+          <h1 className="text-lg font-semibold">
+            {authMode === "sign-in" ? "Sign in" : "Create account"}
+          </h1>
+          <p className="mt-1 text-sm text-gray-500">
+            Email/password access is currently restricted.
+          </p>
+
+          <div className="mt-4 grid grid-cols-2 rounded border border-gray-200 p-1">
+            <button
+              type="button"
+              onClick={() => {
+                setAuthMode("sign-in");
+                setAuthError(null);
+                setAuthMessage(null);
+              }}
+              className={`rounded px-3 py-1.5 text-sm ${
+                authMode === "sign-in"
+                  ? "bg-black text-white"
+                  : "text-gray-600 hover:bg-gray-100"
+              }`}
+            >
+              Sign in
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAuthMode("sign-up");
+                setAuthError(null);
+                setAuthMessage(null);
+              }}
+              className={`rounded px-3 py-1.5 text-sm ${
+                authMode === "sign-up"
+                  ? "bg-black text-white"
+                  : "text-gray-600 hover:bg-gray-100"
+              }`}
+            >
+              Sign up
+            </button>
+          </div>
+
+          <div className="mt-4 flex flex-col gap-3">
+            <label className="flex flex-col gap-1">
+              <span className="text-sm text-gray-600">Email</span>
+              <input
+                type="email"
+                autoComplete="email"
+                value={loginEmail}
+                onChange={(event) => setLoginEmail(event.target.value)}
+                className="rounded border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
+                required
+              />
+            </label>
+
+            <label className="flex flex-col gap-1">
+              <span className="text-sm text-gray-600">Password</span>
+              <input
+                type="password"
+                autoComplete={
+                  authMode === "sign-in"
+                    ? "current-password"
+                    : "new-password"
+                }
+                value={loginPassword}
+                onChange={(event) => setLoginPassword(event.target.value)}
+                className="rounded border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
+                required
+              />
+            </label>
+
+            {authMessage && (
+              <p className="rounded border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-700">
+                {authMessage}
+              </p>
+            )}
+
+            {authError && (
+              <p className="rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                {authError}
+              </p>
+            )}
+
+            <button
+              type="submit"
+              disabled={loggingIn}
+              className="rounded bg-black px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {loggingIn
+                ? authMode === "sign-in"
+                  ? "Signing in..."
+                  : "Creating account..."
+                : authMode === "sign-in"
+                  ? "Sign in"
+                  : "Create account"}
+            </button>
+          </div>
+        </form>
+      </div>
+    );
   }
 
   if (loading) {
@@ -389,7 +688,20 @@ export default function ComposePage() {
           </span>
         </div>
 
-        <div className="px-3 mb-4">
+        <div className="px-4 pb-4 border-b border-gray-200">
+          <p className="text-xs text-gray-500 truncate">{userEmail}</p>
+          <button
+            onClick={handleSignOut}
+            className="mt-1 text-xs text-black hover:underline"
+          >
+            Sign out
+          </button>
+          {authError && (
+            <p className="mt-2 text-[11px] text-red-600">{authError}</p>
+          )}
+        </div>
+
+        <div className="px-3 mt-4 mb-4">
           <select
             value={activeId ?? ""}
             onChange={(e) => setActiveId(e.target.value)}
@@ -722,10 +1034,12 @@ export default function ComposePage() {
               <h1 className="text-xl font-semibold">Send History</h1>
               <button
                 onClick={() => {
+                  if (!activeId) return;
                   setHistoryLoading(true);
-                  fetch(`/api/history?workspace=${encodeURIComponent(activeId!)}`)
-                    .then((res) => res.json())
-                    .then((data: HistoryItem[]) => setHistory(data))
+                  fetchJson<HistoryItem[]>(
+                    `/api/history?workspace=${encodeURIComponent(activeId)}`
+                  )
+                    .then((data) => setHistory(data))
                     .catch(console.error)
                     .finally(() => setHistoryLoading(false));
                 }}

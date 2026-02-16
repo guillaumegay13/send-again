@@ -1,79 +1,112 @@
-import Database from "better-sqlite3";
-import path from "path";
-import fs from "fs";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-const DB_PATH = path.join(process.cwd(), "data", "send-again.db");
+const globalDb = globalThis as unknown as { __supabaseDb?: SupabaseClient };
 
-function createDb(): Database.Database {
-  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-  const db = new Database(DB_PATH);
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS workspace_settings (
-      id TEXT PRIMARY KEY,
-      from_address TEXT NOT NULL,
-      config_set TEXT NOT NULL DEFAULT 'email-tracking-config-set',
-      rate_limit INTEGER NOT NULL DEFAULT 300
-    );
-
-    CREATE TABLE IF NOT EXISTS contacts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      workspace_id TEXT NOT NULL,
-      email TEXT NOT NULL,
-      fields TEXT NOT NULL DEFAULT '{}',
-      UNIQUE(workspace_id, email)
-    );
-
-    CREATE TABLE IF NOT EXISTS sends (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      workspace_id TEXT NOT NULL,
-      message_id TEXT NOT NULL UNIQUE,
-      recipient TEXT NOT NULL,
-      subject TEXT NOT NULL DEFAULT '',
-      sent_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS email_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      message_id TEXT NOT NULL,
-      event_type TEXT NOT NULL,
-      timestamp TEXT NOT NULL,
-      detail TEXT NOT NULL DEFAULT ''
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_events_message_id ON email_events(message_id);
-    CREATE INDEX IF NOT EXISTS idx_sends_workspace ON sends(workspace_id);
-  `);
-
-  // Migrate old contacts schema to new (fields JSON)
-  const cols = db.prepare("PRAGMA table_info(contacts)").all() as { name: string }[];
-  const colNames = cols.map((c) => c.name);
-  if (!colNames.includes("fields")) {
-    db.exec("DROP TABLE contacts");
-    db.exec(`
-      CREATE TABLE contacts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        workspace_id TEXT NOT NULL,
-        email TEXT NOT NULL,
-        fields TEXT NOT NULL DEFAULT '{}',
-        UNIQUE(workspace_id, email)
-      )
-    `);
+function requireEnv(name: string, value: string | undefined): string {
+  if (!value) {
+    throw new Error(`Missing environment variable: ${name}`);
   }
-
-  return db;
+  return value;
 }
 
-// Survive Next.js HMR in dev
-const globalDb = globalThis as unknown as { __db?: Database.Database };
-
-export function getDb(): Database.Database {
-  if (!globalDb.__db) {
-    globalDb.__db = createDb();
+function getDb(): SupabaseClient {
+  if (!globalDb.__supabaseDb) {
+    const supabaseUrl = requireEnv(
+      "SUPABASE_URL or NEXT_PUBLIC_SUPABASE_URL",
+      process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL
+    );
+    const supabaseSecret = requireEnv(
+      "SUPABASE_SECRET_KEY or SUPABASE_SERVICE_ROLE_KEY",
+      process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY
+    );
+    globalDb.__supabaseDb = createClient(supabaseUrl, supabaseSecret, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+    });
   }
-  return globalDb.__db;
+
+  return globalDb.__supabaseDb;
+}
+
+function assertNoError(
+  error: { message: string } | null,
+  context: string
+): void {
+  if (error) {
+    throw new Error(`${context}: ${error.message}`);
+  }
+}
+
+function normalizeFields(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  const normalized: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    normalized[key] = raw == null ? "" : String(raw);
+  }
+  return normalized;
+}
+
+// --- Workspace Memberships ---
+
+interface WorkspaceMembershipRow {
+  workspace_id: string;
+}
+
+export async function ensureWorkspaceMemberships(
+  userId: string,
+  workspaceIds: string[],
+  role: "owner" | "member" = "owner"
+): Promise<void> {
+  const normalizedWorkspaceIds = Array.from(
+    new Set(
+      workspaceIds
+        .map((workspaceId) => workspaceId.trim())
+        .filter((workspaceId) => workspaceId.length > 0)
+    )
+  );
+  if (normalizedWorkspaceIds.length === 0) return;
+
+  const db = getDb();
+  const payload = normalizedWorkspaceIds.map((workspaceId) => ({
+    workspace_id: workspaceId,
+    user_id: userId,
+    role,
+  }));
+  const { error } = await db
+    .from("workspace_memberships")
+    .upsert(payload, { onConflict: "workspace_id,user_id" });
+  assertNoError(error, "Failed to upsert workspace memberships");
+}
+
+export async function getWorkspaceIdsForUser(userId: string): Promise<string[]> {
+  const db = getDb();
+  const { data, error } = await db
+    .from("workspace_memberships")
+    .select("workspace_id")
+    .eq("user_id", userId);
+  assertNoError(error, "Failed to fetch workspace memberships");
+  const rows = (data ?? []) as WorkspaceMembershipRow[];
+  return rows.map((row) => row.workspace_id);
+}
+
+export async function userCanAccessWorkspace(
+  userId: string,
+  workspaceId: string
+): Promise<boolean> {
+  const db = getDb();
+  const { data, error } = await db
+    .from("workspace_memberships")
+    .select("workspace_id")
+    .eq("user_id", userId)
+    .eq("workspace_id", workspaceId)
+    .limit(1);
+  assertNoError(error, "Failed to check workspace access");
+  return (data ?? []).length > 0;
 }
 
 // --- Contacts ---
@@ -83,53 +116,79 @@ export interface DbContact {
   fields: Record<string, string>;
 }
 
-export function getContacts(workspaceId: string): DbContact[] {
-  const db = getDb();
-  const rows = db
-    .prepare(
-      "SELECT email, fields FROM contacts WHERE workspace_id = ? ORDER BY id"
-    )
-    .all(workspaceId) as { email: string; fields: string }[];
-  return rows.map((r) => ({ email: r.email, fields: JSON.parse(r.fields) }));
+interface ContactRow {
+  email: string;
+  fields: unknown;
 }
 
-export function upsertContacts(workspaceId: string, contacts: DbContact[]) {
+export async function getContacts(workspaceId: string): Promise<DbContact[]> {
   const db = getDb();
-  const stmt = db.prepare(`
-    INSERT INTO contacts (workspace_id, email, fields)
-    VALUES (?, ?, ?)
-    ON CONFLICT(workspace_id, email) DO UPDATE SET
-      fields = excluded.fields
-  `);
-  const run = db.transaction((rows: DbContact[]) => {
-    for (const c of rows) {
-      stmt.run(workspaceId, c.email, JSON.stringify(c.fields));
-    }
-  });
-  run(contacts);
+  const { data, error } = await db
+    .from("contacts")
+    .select("email, fields")
+    .eq("workspace_id", workspaceId)
+    .order("id", { ascending: true });
+  assertNoError(error, "Failed to fetch contacts");
+
+  const rows = (data ?? []) as ContactRow[];
+  return rows.map((row) => ({
+    email: row.email,
+    fields: normalizeFields(row.fields),
+  }));
 }
 
-export function updateContact(
+export async function upsertContacts(
+  workspaceId: string,
+  contacts: DbContact[]
+): Promise<void> {
+  if (contacts.length === 0) return;
+
+  const db = getDb();
+  const rows = contacts.map((contact) => ({
+    workspace_id: workspaceId,
+    email: contact.email,
+    fields: contact.fields,
+  }));
+  const { error } = await db
+    .from("contacts")
+    .upsert(rows, { onConflict: "workspace_id,email" });
+  assertNoError(error, "Failed to upsert contacts");
+}
+
+export async function updateContact(
   workspaceId: string,
   email: string,
   fields: Record<string, string>
-) {
+): Promise<void> {
   const db = getDb();
-  db.prepare(
-    "UPDATE contacts SET fields = ? WHERE workspace_id = ? AND email = ?"
-  ).run(JSON.stringify(fields), workspaceId, email);
+  const { error } = await db
+    .from("contacts")
+    .update({ fields })
+    .eq("workspace_id", workspaceId)
+    .eq("email", email);
+  assertNoError(error, "Failed to update contact");
 }
 
-export function deleteContact(workspaceId: string, email: string) {
+export async function deleteContact(
+  workspaceId: string,
+  email: string
+): Promise<void> {
   const db = getDb();
-  db.prepare(
-    "DELETE FROM contacts WHERE workspace_id = ? AND email = ?"
-  ).run(workspaceId, email);
+  const { error } = await db
+    .from("contacts")
+    .delete()
+    .eq("workspace_id", workspaceId)
+    .eq("email", email);
+  assertNoError(error, "Failed to delete contact");
 }
 
-export function deleteAllContacts(workspaceId: string) {
+export async function deleteAllContacts(workspaceId: string): Promise<void> {
   const db = getDb();
-  db.prepare("DELETE FROM contacts WHERE workspace_id = ?").run(workspaceId);
+  const { error } = await db
+    .from("contacts")
+    .delete()
+    .eq("workspace_id", workspaceId);
+  assertNoError(error, "Failed to delete all contacts");
 }
 
 // --- Workspace Settings ---
@@ -141,54 +200,67 @@ export interface DbWorkspaceSettings {
   rate_limit: number;
 }
 
-export function getAllWorkspaceSettings(): DbWorkspaceSettings[] {
+export async function getAllWorkspaceSettings(): Promise<DbWorkspaceSettings[]> {
   const db = getDb();
-  return db
-    .prepare("SELECT id, from_address, config_set, rate_limit FROM workspace_settings")
-    .all() as DbWorkspaceSettings[];
+  const { data, error } = await db
+    .from("workspace_settings")
+    .select("id, from_address, config_set, rate_limit")
+    .order("id", { ascending: true });
+  assertNoError(error, "Failed to fetch workspace settings");
+  return (data ?? []) as DbWorkspaceSettings[];
 }
 
-export function upsertWorkspaceSettings(settings: {
+export async function upsertWorkspaceSettings(settings: {
   id: string;
   from: string;
   configSet: string;
   rateLimit: number;
-}) {
+}): Promise<void> {
   const db = getDb();
-  db.prepare(`
-    INSERT INTO workspace_settings (id, from_address, config_set, rate_limit)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-      from_address = excluded.from_address,
-      config_set = excluded.config_set,
-      rate_limit = excluded.rate_limit
-  `).run(settings.id, settings.from, settings.configSet, settings.rateLimit);
+  const { error } = await db.from("workspace_settings").upsert(
+    {
+      id: settings.id,
+      from_address: settings.from,
+      config_set: settings.configSet,
+      rate_limit: settings.rateLimit,
+    },
+    { onConflict: "id" }
+  );
+  assertNoError(error, "Failed to upsert workspace settings");
 }
 
 // --- Sends & Events ---
 
-export function insertSend(
+export async function insertSend(
   workspaceId: string,
   messageId: string,
   recipient: string,
   subject: string
-) {
+): Promise<void> {
   const db = getDb();
-  db.prepare(
-    `INSERT INTO sends (workspace_id, message_id, recipient, subject) VALUES (?, ?, ?, ?)`
-  ).run(workspaceId, messageId, recipient, subject);
+  const { error } = await db.from("sends").insert({
+    workspace_id: workspaceId,
+    message_id: messageId,
+    recipient,
+    subject,
+  });
+  assertNoError(error, "Failed to insert send");
 }
 
-export function insertEvent(
+export async function insertEvent(
   messageId: string,
   eventType: string,
   timestamp: string,
   detail: string
-) {
+): Promise<void> {
   const db = getDb();
-  db.prepare(
-    `INSERT INTO email_events (message_id, event_type, timestamp, detail) VALUES (?, ?, ?, ?)`
-  ).run(messageId, eventType, timestamp, detail);
+  const { error } = await db.from("email_events").insert({
+    message_id: messageId,
+    event_type: eventType,
+    timestamp,
+    detail,
+  });
+  assertNoError(error, "Failed to insert event");
 }
 
 export interface SendHistoryRow {
@@ -196,26 +268,69 @@ export interface SendHistoryRow {
   recipient: string;
   subject: string;
   sent_at: string;
-  events: string; // JSON array aggregated by GROUP_CONCAT
+  events: string;
 }
 
-export function getSendHistory(workspaceId: string, limit = 100): SendHistoryRow[] {
+interface SendRow {
+  message_id: string;
+  recipient: string;
+  subject: string | null;
+  sent_at: string;
+}
+
+interface EventRow {
+  message_id: string;
+  event_type: string;
+  timestamp: string;
+  detail: string | null;
+}
+
+export async function getSendHistory(
+  workspaceId: string,
+  limit = 100
+): Promise<SendHistoryRow[]> {
   const db = getDb();
-  return db
-    .prepare(
-      `SELECT s.message_id, s.recipient, s.subject, s.sent_at,
-              CASE
-                WHEN COUNT(e.event_type) = 0 THEN '[]'
-                ELSE '[' || GROUP_CONCAT(
-                  json_object('type', e.event_type, 'timestamp', e.timestamp, 'detail', e.detail)
-                ) || ']'
-              END AS events
-       FROM sends s
-       LEFT JOIN email_events e ON e.message_id = s.message_id
-       WHERE s.workspace_id = ?
-       GROUP BY s.message_id
-       ORDER BY s.sent_at DESC
-       LIMIT ?`
-    )
-    .all(workspaceId, limit) as SendHistoryRow[];
+  const rowLimit = Number.isFinite(limit) ? Math.max(1, Math.floor(limit)) : 100;
+  const { data: sendData, error: sendsError } = await db
+    .from("sends")
+    .select("message_id, recipient, subject, sent_at")
+    .eq("workspace_id", workspaceId)
+    .order("sent_at", { ascending: false })
+    .limit(rowLimit);
+  assertNoError(sendsError, "Failed to fetch send history");
+
+  const sends = (sendData ?? []) as SendRow[];
+  if (sends.length === 0) return [];
+
+  const messageIds = sends.map((send) => send.message_id);
+  const { data: eventData, error: eventsError } = await db
+    .from("email_events")
+    .select("message_id, event_type, timestamp, detail")
+    .in("message_id", messageIds)
+    .order("timestamp", { ascending: true });
+  assertNoError(eventsError, "Failed to fetch send events");
+
+  const eventRows = (eventData ?? []) as EventRow[];
+  const eventsByMessageId = new Map<
+    string,
+    Array<{ type: string; timestamp: string; detail: string }>
+  >();
+
+  for (const row of eventRows) {
+    const list = eventsByMessageId.get(row.message_id) ?? [];
+    list.push({
+      type: row.event_type,
+      timestamp: row.timestamp,
+      detail: row.detail ?? "",
+    });
+    eventsByMessageId.set(row.message_id, list);
+  }
+
+  return sends.map((send) => ({
+    message_id: send.message_id,
+    recipient: send.recipient,
+    subject: send.subject ?? "",
+    sent_at: send.sent_at,
+    events: JSON.stringify(eventsByMessageId.get(send.message_id) ?? []),
+  }));
 }

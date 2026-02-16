@@ -1,15 +1,35 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { listVerifiedDomains } from "@/lib/ses";
-import { getAllWorkspaceSettings } from "@/lib/db";
+import {
+  ensureWorkspaceMemberships,
+  getAllWorkspaceSettings,
+  getWorkspaceIdsForUser,
+} from "@/lib/db";
+import {
+  apiErrorResponse,
+  getInitialOwnerEmail,
+  requireAuthenticatedUser,
+} from "@/lib/auth";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
+    const user = await requireAuthenticatedUser(req);
     const domains = await listVerifiedDomains();
+    if (user.email === getInitialOwnerEmail()) {
+      // Preserve existing workspace data by claiming current SES domains
+      // for the bootstrap owner account on first authenticated load.
+      await ensureWorkspaceMemberships(user.id, domains, "owner");
+    }
+
+    const allowedWorkspaceIds = new Set(await getWorkspaceIdsForUser(user.id));
+    const visibleDomains = domains.filter((domain) =>
+      allowedWorkspaceIds.has(domain)
+    );
     const settingsMap = new Map(
-      getAllWorkspaceSettings().map((s) => [s.id, s])
+      (await getAllWorkspaceSettings()).map((s) => [s.id, s])
     );
 
-    const workspaces = domains.map((domain) => {
+    const workspaces = visibleDomains.map((domain) => {
       const saved = settingsMap.get(domain);
       return {
         id: domain,
@@ -21,10 +41,6 @@ export async function GET() {
     });
     return NextResponse.json(workspaces);
   } catch (err) {
-    console.error("Failed to list SES domains:", err);
-    return NextResponse.json(
-      { error: "Failed to fetch SES domains" },
-      { status: 500 }
-    );
+    return apiErrorResponse(err, "Failed to fetch SES domains");
   }
 }

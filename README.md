@@ -24,6 +24,10 @@ Create a `.env.local` file at the project root:
 AWS_ACCESS_KEY_ID=your-access-key
 AWS_SECRET_ACCESS_KEY=your-secret-key
 AWS_REGION=eu-west-3
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_PUBLISHABLE_KEY=your-publishable-key
+SUPABASE_SECRET_KEY=your-secret-key
+INITIAL_OWNER_EMAIL=guillaume.gay@protonmail.com
 ```
 
 | Variable | Required | Default | Description |
@@ -31,12 +35,28 @@ AWS_REGION=eu-west-3
 | `AWS_ACCESS_KEY_ID` | Yes | — | AWS IAM access key with SES permissions |
 | `AWS_SECRET_ACCESS_KEY` | Yes | — | AWS IAM secret key |
 | `AWS_REGION` | No | `eu-west-3` | AWS region where SES is configured |
+| `SUPABASE_URL` | Yes | — | Supabase project URL |
+| `SUPABASE_PUBLISHABLE_KEY` | Yes | — | Supabase publishable key used for email/password login |
+| `SUPABASE_SECRET_KEY` | Yes | — | Supabase server secret key used by API routes |
+| `INITIAL_OWNER_EMAIL` | No | `guillaume.gay@protonmail.com` | Bootstrap owner account that is allowed and auto-linked to existing workspaces |
+| `ALLOWED_AUTH_EMAILS` | No | `INITIAL_OWNER_EMAIL` | Comma-separated allowlist for login access |
 
 ### Database
 
-The app uses SQLite (via `better-sqlite3`). The database is created automatically at `data/send-again.db` on first run — no setup required.
+The app uses Supabase Postgres.
 
-The `data/` directory is git-ignored.
+Run the schema once in Supabase SQL Editor:
+
+```sql
+-- paste and run:
+-- supabase/schema.sql
+```
+
+Then create your user in Supabase Authentication (Email provider enabled):
+
+1. Go to Authentication > Users in Supabase.
+2. Create user `guillaume.gay@protonmail.com` with a password.
+3. Sign in from the app with that email/password.
 
 ### SNS Webhook (for event tracking)
 

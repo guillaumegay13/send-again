@@ -70,7 +70,7 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      insertEvent(messageId, eventType, timestamp, detail);
+      await insertEvent(messageId, eventType, timestamp, detail);
     } catch (err) {
       console.error("Failed to process SNS notification:", err);
     }
