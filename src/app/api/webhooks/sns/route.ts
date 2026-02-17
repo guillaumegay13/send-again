@@ -1,6 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { insertEvent } from "@/lib/db";
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
 function normalizeEventType(eventType: string): string {
   switch (eventType.trim().toLowerCase()) {
     case "send":
@@ -25,12 +34,10 @@ function getEventTimestamp(
   eventType: string,
   fallbackTimestamp: string | undefined
 ): string {
-  const eventPayload = message[eventType.toLowerCase()] as
-    | Record<string, unknown>
-    | undefined;
-  const eventTimestamp = eventPayload?.timestamp as string | undefined;
-  const mail = message.mail as Record<string, unknown> | undefined;
-  const mailTimestamp = mail?.timestamp as string | undefined;
+  const eventPayload = asRecord(message[eventType.toLowerCase()]);
+  const eventTimestamp = asString(eventPayload?.timestamp);
+  const mail = asRecord(message.mail);
+  const mailTimestamp = asString(mail?.timestamp);
   return eventTimestamp || mailTimestamp || fallbackTimestamp || new Date().toISOString();
 }
 
@@ -64,10 +71,10 @@ export async function POST(req: NextRequest) {
   if (messageType === "Notification") {
     try {
       const message = JSON.parse(payload.Message as string) as Record<string, unknown>;
-      const rawEventType = message.eventType as string | undefined;
+      const rawEventType = asString(message.eventType);
       const eventType = rawEventType ? normalizeEventType(rawEventType) : undefined;
-      const mail = message.mail as Record<string, unknown> | undefined;
-      const messageId = mail?.messageId as string | undefined;
+      const mail = asRecord(message.mail);
+      const messageId = asString(mail?.messageId);
       const timestamp = getEventTimestamp(
         message,
         eventType ?? "",
@@ -82,25 +89,27 @@ export async function POST(req: NextRequest) {
       let detail = "";
       switch (eventType) {
         case "Bounce": {
-          const bounce = message.bounce;
-          detail = bounce?.bounceType
-            ? `${bounce.bounceType}/${bounce.bounceSubType ?? ""}`
+          const bounce = asRecord(message.bounce);
+          const bounceType = asString(bounce?.bounceType);
+          const bounceSubType = asString(bounce?.bounceSubType);
+          detail = bounceType
+            ? `${bounceType}/${bounceSubType ?? ""}`
             : "";
           break;
         }
         case "Complaint": {
-          const complaint = message.complaint;
-          detail = complaint?.complaintFeedbackType ?? "";
+          const complaint = asRecord(message.complaint);
+          detail = asString(complaint?.complaintFeedbackType) ?? "";
           break;
         }
         case "Click": {
-          const click = message.click;
-          detail = click?.link ?? "";
+          const click = asRecord(message.click);
+          detail = asString(click?.link) ?? "";
           break;
         }
         case "Open": {
-          const open = message.open;
-          detail = open?.userAgent ?? "";
+          const open = asRecord(message.open);
+          detail = asString(open?.userAgent) ?? "";
           break;
         }
       }
