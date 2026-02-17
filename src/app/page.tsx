@@ -9,6 +9,7 @@ import {
   FormEvent,
 } from "react";
 import { getBrowserSupabaseClient } from "@/lib/supabase-browser";
+import { appendWorkspaceFooter } from "@/lib/email-footer";
 
 type Tab = "compose" | "contacts" | "history" | "settings";
 
@@ -18,6 +19,9 @@ interface Workspace {
   from: string;
   configSet: string;
   rateLimit: number;
+  footerHtml: string;
+  websiteUrl: string;
+  verified: boolean;
 }
 
 interface Contact {
@@ -37,6 +41,31 @@ interface HistoryItem {
   subject: string;
   sentAt: string;
   events: EmailEvent[];
+}
+
+function formatTimestamp(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Invalid Date";
+  return date.toLocaleString();
+}
+
+function normalizeEventType(eventType: string): string {
+  switch (eventType.trim().toLowerCase()) {
+    case "send":
+      return "Send";
+    case "delivery":
+      return "Delivery";
+    case "open":
+      return "Open";
+    case "click":
+      return "Click";
+    case "bounce":
+      return "Bounce";
+    case "complaint":
+      return "Complaint";
+    default:
+      return eventType;
+  }
 }
 
 function parseCSV(text: string): Contact[] {
@@ -78,6 +107,26 @@ function parseCSV(text: string): Contact[] {
   return Array.from(byEmail.values());
 }
 
+function buildPreviewUnsubscribeUrl(workspaceId: string, email: string): string {
+  const params = new URLSearchParams({
+    workspace: workspaceId,
+    email,
+    token: "preview",
+  });
+  return `https://example.com/api/unsubscribe?${params.toString()}`;
+}
+
+function buildPreviewDocument(html: string): string {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+  </head>
+  <body style="margin:0;padding:16px;background:#fff;color:#111827;">${html}</body>
+</html>`;
+}
+
 export default function ComposePage() {
   const [authLoading, setAuthLoading] = useState(true);
   const [sessionToken, setSessionToken] = useState<string | null>(null);
@@ -88,6 +137,9 @@ export default function ComposePage() {
   const [loggingIn, setLoggingIn] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authMessage, setAuthMessage] = useState<string | null>(null);
+  const [workspaceMessage, setWorkspaceMessage] = useState<string | null>(null);
+  const [newWorkspaceId, setNewWorkspaceId] = useState("");
+  const [addingWorkspace, setAddingWorkspace] = useState(false);
 
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -115,6 +167,12 @@ export default function ComposePage() {
   const [dryRun, setDryRun] = useState(true);
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<string | null>(null);
+  const [bodyVibePrompt, setBodyVibePrompt] = useState("");
+  const [footerVibePrompt, setFooterVibePrompt] = useState("");
+  const [bodyVibeBusy, setBodyVibeBusy] = useState(false);
+  const [footerVibeBusy, setFooterVibeBusy] = useState(false);
+  const [bodyVibeStatus, setBodyVibeStatus] = useState<string | null>(null);
+  const [footerVibeStatus, setFooterVibeStatus] = useState<string | null>(null);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -236,6 +294,11 @@ export default function ComposePage() {
   }, [sessionToken, activeId, contactsMap, fetchJson]);
 
   useEffect(() => {
+    setBodyVibeStatus(null);
+    setFooterVibeStatus(null);
+  }, [activeId]);
+
+  useEffect(() => {
     if (!sessionToken) return;
     if (tab !== "history" || !activeId) return;
     setHistoryLoading(true);
@@ -312,6 +375,105 @@ export default function ComposePage() {
     setActiveId(null);
     setContactsMap({});
     setHistory([]);
+    setWorkspaceMessage(null);
+    setNewWorkspaceId("");
+    setBodyVibeStatus(null);
+    setFooterVibeStatus(null);
+  }
+
+  async function addWorkspaceById(rawId: string) {
+    if (!sessionToken) return;
+    const id = rawId.trim().toLowerCase();
+    if (!id) {
+      setWorkspaceMessage("Enter a domain, e.g. example.com");
+      return;
+    }
+
+    setAddingWorkspace(true);
+    setWorkspaceMessage(null);
+    try {
+      const created = await fetchJson<Workspace>("/api/workspaces", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      setWorkspaces((prev) => {
+        const next = [...prev.filter((workspace) => workspace.id !== created.id), created];
+        next.sort((a, b) => a.id.localeCompare(b.id));
+        return next;
+      });
+      setActiveId(created.id);
+      setNewWorkspaceId("");
+      setWorkspaceMessage(`Domain added: ${created.id}`);
+      setTab("settings");
+    } catch (error) {
+      setWorkspaceMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAddingWorkspace(false);
+    }
+  }
+
+  async function addWorkspace() {
+    await addWorkspaceById(newWorkspaceId);
+  }
+
+  async function generateVibeHtml(target: "email" | "footer") {
+    if (!sessionToken || !workspace?.id) return;
+
+    const prompt =
+      target === "email" ? bodyVibePrompt.trim() : footerVibePrompt.trim();
+    if (!prompt) {
+      if (target === "email") {
+        setBodyVibeStatus("Write a prompt first.");
+      } else {
+        setFooterVibeStatus("Write a prompt first.");
+      }
+      return;
+    }
+
+    if (target === "email") {
+      setBodyVibeBusy(true);
+      setBodyVibeStatus(null);
+    } else {
+      setFooterVibeBusy(true);
+      setFooterVibeStatus(null);
+    }
+
+    try {
+      const data = await fetchJson<{ html: string; model: string }>("/api/vibe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspaceId: workspace.id,
+          target,
+          instruction: prompt,
+          currentHtml: target === "email" ? html : workspace.footerHtml,
+          from: workspace.from,
+          websiteUrl: workspace.websiteUrl,
+        }),
+      });
+
+      if (target === "email") {
+        setHtml(data.html);
+        setBodyVibeStatus(`Updated by ${data.model}.`);
+      } else {
+        updateWorkspace({ footerHtml: data.html });
+        setFooterVibeStatus(`Updated by ${data.model}.`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (target === "email") {
+        setBodyVibeStatus(message);
+      } else {
+        setFooterVibeStatus(message);
+      }
+    } finally {
+      if (target === "email") {
+        setBodyVibeBusy(false);
+      } else {
+        setFooterVibeBusy(false);
+      }
+    }
   }
 
   function updateWorkspace(patch: Partial<Workspace>) {
@@ -331,6 +493,8 @@ export default function ComposePage() {
           from: updated.from,
           configSet: updated.configSet,
           rateLimit: updated.rateLimit,
+          footerHtml: updated.footerHtml,
+          websiteUrl: updated.websiteUrl,
         }),
       }).catch(console.error);
     }, 500);
@@ -457,10 +621,26 @@ export default function ComposePage() {
     debounceRef.current = setTimeout(async () => {
       try {
         const resolved = replaceVars(htmlContent, sampleVars);
+        const previewWorkspaceId = workspace?.id ?? "example.com";
+        const previewWebsiteUrl =
+          workspace?.websiteUrl?.trim() || `https://${previewWorkspaceId}`;
+        const previewEmail = sampleVars.email?.trim() || "contact@example.com";
+        const previewUnsubscribeUrl = buildPreviewUnsubscribeUrl(
+          previewWorkspaceId,
+          previewEmail
+        );
+        const resolvedWithFooter = appendWorkspaceFooter({
+          html: resolved,
+          footerHtml: workspace?.footerHtml ?? "",
+          websiteUrl: previewWebsiteUrl,
+          workspaceId: previewWorkspaceId,
+          unsubscribeUrl: previewUnsubscribeUrl,
+        });
+        const previewDoc = buildPreviewDocument(resolvedWithFooter);
         const res = await fetch("/api/preview", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ html: resolved }),
+          body: JSON.stringify({ html: previewDoc }),
         });
         const blob = await res.blob();
         const url = URL.createObjectURL(blob);
@@ -471,7 +651,7 @@ export default function ComposePage() {
         // preview failed silently
       }
     }, 300);
-  }, []);
+  }, [workspace?.id, workspace?.websiteUrl, workspace?.footerHtml]);
 
   // Build sample variables from first recipient's contact data
   const firstRecipient = to.split("\n").map((e) => e.trim()).find(Boolean) ?? "";
@@ -480,6 +660,30 @@ export default function ComposePage() {
     email: sampleContact?.email ?? firstRecipient,
     ...(sampleContact?.fields ?? {}),
   };
+
+  const footerPreviewWorkspaceId = workspace?.id ?? "example.com";
+  const footerPreviewWebsiteUrl =
+    workspace?.websiteUrl?.trim() || `https://${footerPreviewWorkspaceId}`;
+  const footerPreviewEmail = sampleVars.email?.trim() || "contact@example.com";
+  const footerPreviewUnsubscribeUrl = buildPreviewUnsubscribeUrl(
+    footerPreviewWorkspaceId,
+    footerPreviewEmail
+  );
+  const footerPreviewHtml = appendWorkspaceFooter({
+    html: [
+      "<div style=\"font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;\">",
+      "<h2 style=\"margin:0 0 8px 0;font-size:22px;line-height:1.2;\">Email Content Preview</h2>",
+      "<p style=\"margin:0;color:#374151;line-height:1.6;\">",
+      "This sample block simulates the body of your email. Your configured footer appears below.",
+      "</p>",
+      "</div>",
+    ].join(""),
+    footerHtml: workspace?.footerHtml ?? "",
+    websiteUrl: footerPreviewWebsiteUrl,
+    workspaceId: footerPreviewWorkspaceId,
+    unsubscribeUrl: footerPreviewUnsubscribeUrl,
+  });
+  const footerPreviewDoc = buildPreviewDocument(footerPreviewHtml);
 
   // Compute all field keys across contacts for column headers and variable hints
   const allFieldKeys = Array.from(
@@ -529,6 +733,8 @@ export default function ComposePage() {
           dryRun,
           configSet: workspace.configSet,
           rateLimit: workspace.rateLimit,
+          footerHtml: workspace.footerHtml,
+          websiteUrl: workspace.websiteUrl,
         }),
       });
       if (data.dryRun) {
@@ -672,8 +878,43 @@ export default function ComposePage() {
 
   if (!workspace) {
     return (
-      <div className="flex h-screen items-center justify-center text-gray-400 text-sm">
-        No verified SES domains found. Add a domain in AWS SES first.
+      <div className="flex h-screen items-center justify-center bg-gray-50 px-4">
+        <div className="w-full max-w-md rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+          <div className="flex items-center justify-between">
+            <h1 className="text-lg font-semibold">No workspace yet</h1>
+            <button
+              onClick={handleSignOut}
+              className="text-xs text-black hover:underline"
+            >
+              Sign out
+            </button>
+          </div>
+          <p className="mt-2 text-sm text-gray-500">
+            Add a domain/workspace to start testing. SES verification is only required for real sends.
+          </p>
+
+          <div className="mt-4 flex gap-2">
+            <input
+              type="text"
+              value={newWorkspaceId}
+              onChange={(event) => setNewWorkspaceId(event.target.value)}
+              onKeyDown={(event) => event.key === "Enter" && addWorkspace()}
+              placeholder="example.com"
+              className="flex-1 rounded border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-black"
+            />
+            <button
+              onClick={addWorkspace}
+              disabled={addingWorkspace}
+              className="rounded bg-black px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {addingWorkspace ? "Adding..." : "Add domain"}
+            </button>
+          </div>
+
+          {workspaceMessage && (
+            <p className="mt-3 text-xs text-gray-600">{workspaceMessage}</p>
+          )}
+        </div>
       </div>
     );
   }
@@ -702,17 +943,35 @@ export default function ComposePage() {
         </div>
 
         <div className="px-3 mt-4 mb-4">
-          <select
-            value={activeId ?? ""}
-            onChange={(e) => setActiveId(e.target.value)}
-            className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-black"
-          >
-            {workspaces.map((ws) => (
-              <option key={ws.id} value={ws.id}>
-                {ws.name}
-              </option>
-            ))}
-          </select>
+          <div className="flex gap-2">
+            <select
+              value={activeId ?? ""}
+              onChange={(e) => setActiveId(e.target.value)}
+              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-black"
+            >
+              {workspaces.map((ws) => (
+                <option key={ws.id} value={ws.id}>
+                  {ws.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => {
+                if (addingWorkspace) return;
+                const value = prompt("Domain to add (e.g. example.com):");
+                if (!value) return;
+                void addWorkspaceById(value);
+              }}
+              disabled={addingWorkspace}
+              className="shrink-0 rounded border border-gray-300 px-2 py-1.5 text-xs hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {addingWorkspace ? "..." : "Add"}
+            </button>
+          </div>
+          {workspaceMessage && (
+            <p className="mt-1 text-[11px] text-gray-500">{workspaceMessage}</p>
+          )}
         </div>
 
         <nav className="flex flex-col gap-1 px-2">
@@ -750,6 +1009,11 @@ export default function ComposePage() {
                 <p className="text-xs text-gray-400 mt-0.5">
                   Sending as {workspace.name}
                 </p>
+                {!workspace.verified && (
+                  <p className="mt-1 text-xs text-amber-700">
+                    This domain is not verified in SES yet. Dry run works, live send will fail until verified.
+                  </p>
+                )}
               </div>
 
               <label className="flex flex-col gap-1">
@@ -801,6 +1065,33 @@ export default function ComposePage() {
                 />
               </label>
 
+              <div className="rounded border border-gray-200 bg-gray-50 p-3">
+                <p className="text-sm font-medium text-gray-700">Vibe Body</p>
+                <p className="mt-1 text-xs text-gray-500">
+                  Describe what to write or how to revise. Click again to iterate from current HTML.
+                </p>
+                <textarea
+                  value={bodyVibePrompt}
+                  onChange={(e) => setBodyVibePrompt(e.target.value)}
+                  rows={3}
+                  placeholder="Write a concise launch email for indie founders, warm tone, with one CTA button."
+                  className="mt-2 w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black resize-y"
+                />
+                <div className="mt-2 flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => generateVibeHtml("email")}
+                    disabled={bodyVibeBusy}
+                    className="rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {bodyVibeBusy ? "Generating..." : "Generate Body HTML"}
+                  </button>
+                  {bodyVibeStatus && (
+                    <span className="text-xs text-gray-500">{bodyVibeStatus}</span>
+                  )}
+                </div>
+              </div>
+
               <label className="flex flex-col gap-1">
                 <span className="text-sm font-medium text-gray-600">
                   Body{" "}
@@ -822,6 +1113,9 @@ export default function ComposePage() {
                       <code className="bg-gray-100 px-1 rounded">{`{{${k}}}`}</code>
                     </span>
                   ))}
+                </span>
+                <span className="text-xs text-gray-400">
+                  Workspace footer + unsubscribe link are appended automatically.
                 </span>
               </label>
 
@@ -1078,7 +1372,7 @@ export default function ComposePage() {
                   <tbody>
                     {history.map((item) => {
                       const eventTypes = new Set(
-                        item.events.map((e) => e.type)
+                        item.events.map((e) => normalizeEventType(e.type))
                       );
                       return (
                         <tr
@@ -1092,7 +1386,7 @@ export default function ComposePage() {
                             {item.subject}
                           </td>
                           <td className="px-3 py-2 text-sm text-gray-500 whitespace-nowrap">
-                            {new Date(item.sentAt + "Z").toLocaleString()}
+                            {formatTimestamp(item.sentAt)}
                           </td>
                           <td className="px-3 py-2">
                             <div className="flex flex-wrap gap-1">
@@ -1146,52 +1440,136 @@ export default function ComposePage() {
         )}
 
         {tab === "settings" && (
-          <div className="flex-1 p-6 max-w-xl">
+          <div className="flex-1 p-6 overflow-y-auto">
             <h1 className="text-xl font-semibold mb-1">Settings</h1>
             <p className="text-xs text-gray-400 mb-6">{workspace.name}</p>
 
-            <div className="flex flex-col gap-5">
-              <label className="flex flex-col gap-1">
-                <span className="text-sm font-medium text-gray-600">
-                  Default From
-                </span>
-                <input
-                  type="text"
-                  value={workspace.from}
-                  onChange={(e) => updateWorkspace({ from: e.target.value })}
-                  className="border border-gray-300 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-black"
-                />
-              </label>
+            <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_26rem] gap-6 items-start">
+              <div className="flex flex-col gap-5 max-w-xl">
+                <label className="flex flex-col gap-1">
+                  <span className="text-sm font-medium text-gray-600">
+                    Default From
+                  </span>
+                  <input
+                    type="text"
+                    value={workspace.from}
+                    onChange={(e) => updateWorkspace({ from: e.target.value })}
+                    className="border border-gray-300 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-black"
+                  />
+                </label>
 
-              <label className="flex flex-col gap-1">
-                <span className="text-sm font-medium text-gray-600">
-                  SES Configuration Set
-                </span>
-                <input
-                  type="text"
-                  value={workspace.configSet}
-                  onChange={(e) =>
-                    updateWorkspace({ configSet: e.target.value })
-                  }
-                  className="border border-gray-300 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-black"
-                />
-              </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-sm font-medium text-gray-600">
+                    SES Configuration Set
+                  </span>
+                  <input
+                    type="text"
+                    value={workspace.configSet}
+                    onChange={(e) =>
+                      updateWorkspace({ configSet: e.target.value })
+                    }
+                    className="border border-gray-300 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-black"
+                  />
+                </label>
 
-              <label className="flex flex-col gap-1">
+                <label className="flex flex-col gap-1">
+                  <span className="text-sm font-medium text-gray-600">
+                    Website URL (domain page link)
+                  </span>
+                  <input
+                    type="url"
+                    value={workspace.websiteUrl}
+                    onChange={(e) =>
+                      updateWorkspace({ websiteUrl: e.target.value })
+                    }
+                    placeholder={`https://${workspace.id}`}
+                    className="border border-gray-300 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-black"
+                  />
+                </label>
+
+                <div className="rounded border border-gray-200 bg-gray-50 p-3">
+                  <p className="text-sm font-medium text-gray-700">Vibe Footer</p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Describe the footer style or ask for edits. Each run updates the current footer.
+                  </p>
+                  <textarea
+                    value={footerVibePrompt}
+                    onChange={(e) => setFooterVibePrompt(e.target.value)}
+                    rows={3}
+                    placeholder="Create a clean minimal footer with brand tone, website link and unsubscribe."
+                    className="mt-2 w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black resize-y"
+                  />
+                  <div className="mt-2 flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => generateVibeHtml("footer")}
+                      disabled={footerVibeBusy}
+                      className="rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {footerVibeBusy ? "Generating..." : "Generate Footer HTML"}
+                    </button>
+                    {footerVibeStatus && (
+                      <span className="text-xs text-gray-500">{footerVibeStatus}</span>
+                    )}
+                  </div>
+                </div>
+
+                <label className="flex flex-col gap-1">
+                  <span className="text-sm font-medium text-gray-600">
+                    Footer HTML (appended to every email)
+                  </span>
+                  <textarea
+                    rows={8}
+                    value={workspace.footerHtml}
+                    onChange={(e) =>
+                      updateWorkspace({ footerHtml: e.target.value })
+                    }
+                    placeholder="<p>Thanks for reading.</p><p><a href='{{unsubscribe_url}}'>Unsubscribe</a></p>"
+                    className="border border-gray-300 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-black resize-y"
+                  />
+                  <span className="text-xs text-gray-400">
+                    Supported variables:{" "}
+                    <code className="bg-gray-100 px-1 rounded">
+                      {"{{unsubscribe_url}}"}
+                    </code>{" "}
+                    and{" "}
+                    <code className="bg-gray-100 px-1 rounded">
+                      {"{{workspace_url}}"}
+                    </code>
+                  </span>
+                </label>
+
+                <label className="flex flex-col gap-1">
+                  <span className="text-sm font-medium text-gray-600">
+                    Rate limit between sends (ms)
+                  </span>
+                  <input
+                    type="number"
+                    value={workspace.rateLimit}
+                    onChange={(e) =>
+                      updateWorkspace({ rateLimit: Number(e.target.value) })
+                    }
+                    min={0}
+                    step={50}
+                    className="border border-gray-300 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-black w-32"
+                  />
+                </label>
+              </div>
+
+              <div className="flex flex-col gap-2 xl:sticky xl:top-6">
                 <span className="text-sm font-medium text-gray-600">
-                  Rate limit between sends (ms)
+                  Footer Preview
                 </span>
-                <input
-                  type="number"
-                  value={workspace.rateLimit}
-                  onChange={(e) =>
-                    updateWorkspace({ rateLimit: Number(e.target.value) })
-                  }
-                  min={0}
-                  step={50}
-                  className="border border-gray-300 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-black w-32"
+                <p className="text-xs text-gray-400">
+                  Preview uses sample values for unsubscribe and workspace links.
+                </p>
+                <iframe
+                  title="Footer preview"
+                  srcDoc={footerPreviewDoc}
+                  className="h-[28rem] w-full rounded border border-gray-200 bg-white"
+                  sandbox="allow-same-origin"
                 />
-              </label>
+              </div>
             </div>
           </div>
         )}

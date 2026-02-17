@@ -39,6 +39,19 @@ function assertNoError(
   }
 }
 
+function isMissingWorkspaceOptionalColumnError(
+  error: { message: string } | null
+): boolean {
+  if (!error) return false;
+  const message = error.message.toLowerCase();
+  if (!message.includes("workspace_settings")) return false;
+  return (
+    message.includes("footer_html") ||
+    message.includes("website_url") ||
+    (message.includes("column") && message.includes("does not exist"))
+  );
+}
+
 function normalizeFields(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
@@ -224,16 +237,59 @@ export interface DbWorkspaceSettings {
   from_address: string;
   config_set: string;
   rate_limit: number;
+  footer_html: string;
+  website_url: string;
+}
+
+interface WorkspaceSettingsRow {
+  id: unknown;
+  from_address: unknown;
+  config_set: unknown;
+  rate_limit: unknown;
+  footer_html?: unknown;
+  website_url?: unknown;
+}
+
+function normalizeWorkspaceSettingsRow(
+  row: WorkspaceSettingsRow
+): DbWorkspaceSettings {
+  return {
+    id: String(row.id ?? ""),
+    from_address: String(row.from_address ?? ""),
+    config_set: String(row.config_set ?? "email-tracking-config-set"),
+    rate_limit:
+      typeof row.rate_limit === "number"
+        ? row.rate_limit
+        : Number(row.rate_limit ?? 300),
+    footer_html: String(row.footer_html ?? ""),
+    website_url: String(row.website_url ?? ""),
+  };
 }
 
 export async function getAllWorkspaceSettings(): Promise<DbWorkspaceSettings[]> {
   const db = getDb();
   const { data, error } = await db
     .from("workspace_settings")
-    .select("id, from_address, config_set, rate_limit")
+    .select("*")
     .order("id", { ascending: true });
   assertNoError(error, "Failed to fetch workspace settings");
-  return (data ?? []) as DbWorkspaceSettings[];
+  const rows = (data ?? []) as WorkspaceSettingsRow[];
+  return rows.map(normalizeWorkspaceSettingsRow);
+}
+
+export async function getWorkspaceSettings(
+  workspaceId: string
+): Promise<DbWorkspaceSettings | null> {
+  const db = getDb();
+  const { data, error } = await db
+    .from("workspace_settings")
+    .select("*")
+    .eq("id", workspaceId)
+    .limit(1);
+  assertNoError(error, "Failed to fetch workspace settings");
+  const rows = (data ?? []) as WorkspaceSettingsRow[];
+  const row = rows[0];
+  return row ? normalizeWorkspaceSettingsRow(row) : null;
 }
 
 export async function upsertWorkspaceSettings(settings: {
@@ -241,17 +297,37 @@ export async function upsertWorkspaceSettings(settings: {
   from: string;
   configSet: string;
   rateLimit: number;
+  footerHtml: string;
+  websiteUrl: string;
 }): Promise<void> {
   const db = getDb();
-  const { error } = await db.from("workspace_settings").upsert(
-    {
+  const fullPayload = {
+    id: settings.id,
+    from_address: settings.from,
+    config_set: settings.configSet,
+    rate_limit: settings.rateLimit,
+    footer_html: settings.footerHtml,
+    website_url: settings.websiteUrl,
+  };
+
+  const { error } = await db
+    .from("workspace_settings")
+    .upsert(fullPayload, { onConflict: "id" });
+
+  if (isMissingWorkspaceOptionalColumnError(error)) {
+    const legacyPayload = {
       id: settings.id,
       from_address: settings.from,
       config_set: settings.configSet,
       rate_limit: settings.rateLimit,
-    },
-    { onConflict: "id" }
-  );
+    };
+    const { error: legacyError } = await db
+      .from("workspace_settings")
+      .upsert(legacyPayload, { onConflict: "id" });
+    assertNoError(legacyError, "Failed to upsert workspace settings");
+    return;
+  }
+
   assertNoError(error, "Failed to upsert workspace settings");
 }
 

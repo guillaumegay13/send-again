@@ -27,6 +27,10 @@ AWS_REGION=eu-west-3
 SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_PUBLISHABLE_KEY=your-publishable-key
 SUPABASE_SECRET_KEY=your-secret-key
+APP_BASE_URL=https://your-app-domain.com
+UNSUBSCRIBE_SECRET=replace-with-random-secret
+OPENAI_API_KEY=your-openai-api-key
+OPENAI_MODEL=gpt-4.1-mini
 INITIAL_OWNER_EMAIL=guillaume.gay@protonmail.com
 ```
 
@@ -38,6 +42,10 @@ INITIAL_OWNER_EMAIL=guillaume.gay@protonmail.com
 | `SUPABASE_URL` | Yes | — | Supabase project URL |
 | `SUPABASE_PUBLISHABLE_KEY` | Yes | — | Supabase publishable key used for email/password login |
 | `SUPABASE_SECRET_KEY` | Yes | — | Supabase server secret key used by API routes |
+| `APP_BASE_URL` | No | request origin | Public base URL used in unsubscribe links (set this in production) |
+| `UNSUBSCRIBE_SECRET` | No | `SUPABASE_SECRET_KEY`/`SUPABASE_SERVICE_ROLE_KEY` | Secret used to sign unsubscribe links |
+| `OPENAI_API_KEY` | No | — | Enables vibe generation for body/footer HTML |
+| `OPENAI_MODEL` | No | `gpt-4.1-mini` | Model used for vibe generation |
 | `INITIAL_OWNER_EMAIL` | No | `guillaume.gay@protonmail.com` | Bootstrap owner account that is allowed and auto-linked to existing workspaces |
 | `ALLOWED_AUTH_EMAILS` | No | `INITIAL_OWNER_EMAIL` | Comma-separated allowlist for login access |
 

@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { sendEmail } from "@/lib/ses";
 import { insertSend, getContacts, userCanAccessWorkspace } from "@/lib/db";
 import { apiErrorResponse, requireAuthenticatedUser } from "@/lib/auth";
+import { appendWorkspaceFooter } from "@/lib/email-footer";
+import { buildUnsubscribeUrl } from "@/lib/unsubscribe";
 
 interface SendBody {
   workspaceId: string;
@@ -12,13 +14,26 @@ interface SendBody {
   dryRun: boolean;
   configSet: string;
   rateLimit: number;
+  footerHtml: string;
+  websiteUrl: string;
 }
 
 export async function POST(req: NextRequest) {
   try {
     const user = await requireAuthenticatedUser(req);
     const body = (await req.json()) as SendBody;
-    const { workspaceId, from, to, subject, html, dryRun, configSet, rateLimit } = body;
+    const {
+      workspaceId,
+      from,
+      to,
+      subject,
+      html,
+      dryRun,
+      configSet,
+      rateLimit,
+      footerHtml,
+      websiteUrl,
+    } = body;
 
     if (!workspaceId || !from || !to?.length || !subject || !html) {
       return NextResponse.json(
@@ -44,25 +59,44 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ sent: to.length, dryRun: true });
     }
 
+    const baseUrl =
+      process.env.APP_BASE_URL?.trim() ||
+      process.env.NEXT_PUBLIC_APP_URL?.trim() ||
+      req.nextUrl.origin;
+
     const delay = Math.max(0, rateLimit ?? 300);
     let sent = 0;
     const errorEmails: string[] = [];
 
     // Build contact lookup for template variables
     const contactList = await getContacts(workspaceId);
-    const contactMap = new Map(contactList.map((c) => [c.email, c]));
+    const contactMap = new Map(
+      contactList.map((c) => [c.email.toLowerCase(), c])
+    );
 
     for (const recipient of to) {
       // Replace template variables per recipient
-      const contact = contactMap.get(recipient);
+      const contact = contactMap.get(recipient.toLowerCase());
       const vars: Record<string, string> = {
         email: recipient,
         ...(contact?.fields ?? {}),
       };
-      const personalizedHtml = html.replace(
+      const basePersonalizedHtml = html.replace(
         /\{\{(\w+)\}\}/g,
         (_, key) => vars[key.toLowerCase()] ?? `{{${key}}}`
       );
+      const unsubscribeUrl = buildUnsubscribeUrl({
+        baseUrl,
+        workspaceId,
+        email: recipient,
+      });
+      const personalizedHtml = appendWorkspaceFooter({
+        html: basePersonalizedHtml,
+        footerHtml: footerHtml ?? "",
+        websiteUrl: websiteUrl ?? "",
+        workspaceId,
+        unsubscribeUrl,
+      });
       const personalizedSubject = subject.replace(
         /\{\{(\w+)\}\}/g,
         (_, key) => vars[key.toLowerCase()] ?? `{{${key}}}`
