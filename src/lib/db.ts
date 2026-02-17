@@ -123,15 +123,41 @@ interface ContactRow {
 
 export async function getContacts(workspaceId: string): Promise<DbContact[]> {
   const db = getDb();
-  const { data, error } = await db
+  const pageSize = 1000;
+  const allRows: ContactRow[] = [];
+
+  // Supabase/PostgREST can enforce a max rows per response (often 1000),
+  // so fetch contacts in pages to avoid truncating large lists.
+  const { data: firstPageData, error, count } = await db
     .from("contacts")
-    .select("email, fields")
+    .select("email, fields", { count: "exact" })
     .eq("workspace_id", workspaceId)
-    .order("id", { ascending: true });
+    .order("id", { ascending: true })
+    .range(0, pageSize - 1);
   assertNoError(error, "Failed to fetch contacts");
 
-  const rows = (data ?? []) as ContactRow[];
-  return rows.map((row) => ({
+  const firstPage = (firstPageData ?? []) as ContactRow[];
+  allRows.push(...firstPage);
+
+  const totalRows = Math.max(count ?? allRows.length, allRows.length);
+  let from = allRows.length;
+  while (from < totalRows) {
+    const { data: pageData, error: pageError } = await db
+      .from("contacts")
+      .select("email, fields")
+      .eq("workspace_id", workspaceId)
+      .order("id", { ascending: true })
+      .range(from, from + pageSize - 1);
+    assertNoError(pageError, "Failed to fetch contacts");
+
+    const page = (pageData ?? []) as ContactRow[];
+    if (page.length === 0) break;
+
+    allRows.push(...page);
+    from += page.length;
+  }
+
+  return allRows.map((row) => ({
     email: row.email,
     fields: normalizeFields(row.fields),
   }));
