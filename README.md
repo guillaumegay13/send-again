@@ -33,6 +33,10 @@ OPENAI_API_KEY=your-openai-api-key
 OPENAI_MODEL=gpt-4.1-mini
 INITIAL_OWNER_EMAIL=guillaume.gay@protonmail.com
 CONTACT_SOURCE_API_TOKEN=optional-default-api-token
+SEND_JOB_PROCESSOR_TOKEN=optional-worker-token
+SEND_JOB_BATCH_SIZE=50
+SEND_JOB_CONCURRENCY=4
+SEND_JOB_MAX_RECIPIENTS_PER_JOB=250
 ```
 
 | Variable | Required | Default | Description |
@@ -50,6 +54,13 @@ CONTACT_SOURCE_API_TOKEN=optional-default-api-token
 | `INITIAL_OWNER_EMAIL` | No | `guillaume.gay@protonmail.com` | Bootstrap owner account that is allowed and auto-linked to existing workspaces |
 | `ALLOWED_AUTH_EMAILS` | No | `INITIAL_OWNER_EMAIL` | Comma-separated allowlist for login access |
 | `CONTACT_SOURCE_API_TOKEN` | No | — | Optional fallback token for workspace contact API integrations |
+| `SEND_JOB_BATCH_SIZE` | No | `50` | Number of recipients to fetch from queue per batch |
+| `SEND_JOB_CONCURRENCY` | No | `4` | Parallel sends per batch in the worker |
+| `SEND_JOB_MAX_RECIPIENTS_PER_JOB` | No | `250` | Max recipients processed per processor invocation |
+| `SEND_JOB_MAX_JOBS` | No | `1` | Max number of jobs processed per invocation |
+| `SEND_JOB_STALE_MS` | No | `180000` | Reclaim queued/running jobs after this heartbeat delay |
+| `SEND_JOB_STALE_RECIPIENT_MS` | No | `180000` | Retry `sending` recipients after this delay |
+| `SEND_JOB_PROCESSOR_TOKEN` | No | — | Optional shared secret required by `/api/send/process` |
 
 ### Database
 
@@ -67,6 +78,18 @@ Then create your user in Supabase Authentication (Email provider enabled):
 1. Go to Authentication > Users in Supabase.
 2. Create user `guillaume.gay@protonmail.com` with a password.
 3. Sign in from the app with that email/password.
+
+### Async Send API
+
+- `POST /api/send` → enqueue send job (or dry-run count).
+- `GET /api/send/status?jobId=<id>` → live job progress/status.
+- `GET /api/send/jobs?workspace=<id>&status=queued,running` → list jobs for current user.
+- `POST /api/send/process` → worker endpoint to process queued/running jobs.
+
+Production recommendation:
+
+- Use a cron or worker to call `POST /api/send/process` every minute.
+- Keep `SEND_JOB_PROCESSOR_TOKEN` set and pass it in `x-send-job-token` or `Authorization: Bearer ...`.
 
 ### SNS Webhook (for event tracking)
 

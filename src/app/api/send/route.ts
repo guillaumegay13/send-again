@@ -1,15 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { sendEmail } from "@/lib/ses";
-import { insertSend, getContacts, userCanAccessWorkspace } from "@/lib/db";
+import {
+  createSendJob,
+  failSendJobWithMessage,
+  getContacts,
+  userCanAccessWorkspace,
+  insertSendJobRecipients,
+} from "@/lib/db";
 import { apiErrorResponse, requireAuthenticatedUser } from "@/lib/auth";
-import { appendWorkspaceFooter } from "@/lib/email-footer";
-import { buildUnsubscribeUrl } from "@/lib/unsubscribe";
 
 interface SendBody {
   workspaceId: string;
   from: string;
   to: string[];
-  recipientMode?: "manual" | "all_contacts" | "verified_contacts" | "unverified_contacts";
+  recipientMode?: RecipientMode;
   subject: string;
   html: string;
   dryRun: boolean;
@@ -32,20 +35,16 @@ function normalizeRecipientMode(value: unknown): RecipientMode {
   return "manual";
 }
 
-function uniqueEmails(values: string[]): string[] {
-  const seen = new Set<string>();
-  const unique: string[] = [];
+function normalizeRateLimit(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 300;
+  return Math.max(0, Math.floor(parsed));
+}
 
-  for (const value of values) {
-    const email = value.trim();
-    if (!email) continue;
-    const key = email.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    unique.push(email);
-  }
-
-  return unique;
+function normalizeConcurrency(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 4;
+  return Math.max(1, Math.floor(parsed));
 }
 
 function parseBooleanLike(value: string | undefined): boolean | null {
@@ -57,40 +56,122 @@ function parseBooleanLike(value: string | undefined): boolean | null {
   return null;
 }
 
+function uniqueEmails(values: string[]): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+
+  for (const value of values) {
+    const email = value.trim().toLowerCase();
+    if (!email) continue;
+    if (seen.has(email)) continue;
+    seen.add(email);
+    unique.push(email);
+  }
+
+  return unique;
+}
+
+function normalizeSendRequestBody(raw: unknown): SendBody {
+  const body = (raw ?? {}) as Record<string, unknown>;
+
+  const workspaceId = String(body.workspaceId ?? "").trim().toLowerCase();
+  const from = String(body.from ?? "").trim();
+  const subject = String(body.subject ?? "").trim();
+  const html = String(body.html ?? "").trim();
+  const footerHtml = String(body.footerHtml ?? "");
+  const websiteUrl = String(body.websiteUrl ?? "");
+  const rateLimit = normalizeRateLimit(body.rateLimit);
+  const configSet = String(body.configSet ?? "email-tracking-config-set").trim();
+  const recipientMode = normalizeRecipientMode(body.recipientMode);
+  const dryRun = typeof body.dryRun === "boolean" ? body.dryRun : false;
+  const to = Array.isArray(body.to)
+    ? (body.to.filter((value): value is string => typeof value === "string") as string[])
+    : [];
+
+  return {
+    workspaceId,
+    from,
+    to,
+    recipientMode,
+    subject,
+    html,
+    dryRun,
+    configSet,
+    rateLimit,
+    footerHtml,
+    websiteUrl,
+  };
+}
+
 export async function POST(req: NextRequest) {
   try {
     const user = await requireAuthenticatedUser(req);
-    const body = (await req.json()) as SendBody;
-    const {
-      workspaceId,
-      from,
-      to,
-      recipientMode: rawRecipientMode,
-      subject,
-      html,
-      dryRun,
-      configSet,
-      rateLimit,
-      footerHtml,
-      websiteUrl,
-    } = body;
+    const body = normalizeSendRequestBody(await req.json());
+    const hasAccess = await userCanAccessWorkspace(user.id, body.workspaceId);
+    if (!hasAccess) {
+      return NextResponse.json({ error: "Workspace not found" }, { status: 403 });
+    }
 
-    if (!workspaceId || !from || !subject || !html) {
+    if (
+      !body.workspaceId ||
+      !body.from ||
+      !body.subject ||
+      !body.html ||
+      !body.configSet
+    ) {
       return NextResponse.json(
         { error: "Missing required fields" },
         { status: 400 }
       );
     }
 
-    const hasAccess = await userCanAccessWorkspace(user.id, workspaceId);
-    if (!hasAccess) {
-      return NextResponse.json({ error: "Workspace not found" }, { status: 403 });
+    if (!/^\S+@\S+\.\S+$/.test(body.from)) {
+      return NextResponse.json({ error: "Invalid from address" }, { status: 400 });
     }
 
-    const fromDomain = from.includes("@") ? from.split("@")[1] : from;
-    if (fromDomain && fromDomain !== workspaceId) {
+    const fromDomain = body.from.split("@")[1]?.toLowerCase() ?? "";
+    if (fromDomain !== body.workspaceId.toLowerCase()) {
       return NextResponse.json(
         { error: "From address does not match workspace" },
+        { status: 400 }
+      );
+    }
+
+    const recipientMode = body.recipientMode;
+
+    let recipients: string[] = [];
+    if (recipientMode === "manual") {
+      recipients = uniqueEmails(body.to);
+    } else {
+      const contacts = await getContacts(body.workspaceId);
+      if (contacts.length > 0) {
+        if (recipientMode === "all_contacts") {
+          recipients = uniqueEmails(contacts.map((contact) => contact.email));
+        }
+        if (recipientMode === "verified_contacts") {
+          recipients = uniqueEmails(
+            contacts
+              .filter(
+                (contact) => parseBooleanLike(contact.fields.verified) === true
+              )
+              .map((contact) => contact.email)
+          );
+        }
+        if (recipientMode === "unverified_contacts") {
+          recipients = uniqueEmails(
+            contacts
+              .filter(
+                (contact) => parseBooleanLike(contact.fields.verified) === false
+              )
+              .map((contact) => contact.email)
+          );
+        }
+      }
+    }
+
+    if (recipients.length === 0) {
+      return NextResponse.json(
+        { error: "No recipients resolved for this send" },
         { status: 400 }
       );
     }
@@ -100,113 +181,68 @@ export async function POST(req: NextRequest) {
       process.env.NEXT_PUBLIC_APP_URL?.trim() ||
       req.nextUrl.origin;
 
-    const recipientMode = normalizeRecipientMode(rawRecipientMode);
-    const delay = Math.max(0, rateLimit ?? 300);
-    let sent = 0;
-    const errorEmails: string[] = [];
+    const payload = {
+      workspaceId: body.workspaceId,
+      from: body.from,
+      subject: body.subject,
+      html: body.html,
+      configSet: body.configSet,
+      rateLimit: body.rateLimit,
+      footerHtml: body.footerHtml,
+      websiteUrl: body.websiteUrl,
+      baseUrl,
+    };
 
-    const contactList = await getContacts(workspaceId);
-    const contactMap = new Map(
-      contactList.map((c) => [c.email.toLowerCase(), c])
-    );
-
-    const recipients = (() => {
-      if (recipientMode === "all_contacts") {
-        return uniqueEmails(contactList.map((contact) => contact.email));
-      }
-      if (recipientMode === "verified_contacts") {
-        return uniqueEmails(
-          contactList
-            .filter(
-              (contact) => parseBooleanLike(contact.fields.verified) === true
-            )
-            .map((contact) => contact.email)
-        );
-      }
-      if (recipientMode === "unverified_contacts") {
-        return uniqueEmails(
-          contactList
-            .filter(
-              (contact) => parseBooleanLike(contact.fields.verified) === false
-            )
-            .map((contact) => contact.email)
-        );
-      }
-      return uniqueEmails(Array.isArray(to) ? to : []);
-    })();
-
-    if (recipients.length === 0) {
-      return NextResponse.json(
-        { error: "No recipients resolved for this send" },
-        { status: 400 }
-      );
+    if (body.dryRun) {
+      return NextResponse.json({
+        sent: recipients.length,
+        dryRun: true,
+      });
     }
 
-    if (dryRun) {
-      return NextResponse.json({ sent: recipients.length, dryRun: true });
-    }
+    const jobId = await createSendJob({
+      userId: user.id,
+      payload,
+      totalRecipients: recipients.length,
+      rateLimit: body.rateLimit,
+      batchSize: normalizeNonNegativeInteger(
+        process.env.SEND_JOB_BATCH_SIZE ?? 50,
+        50,
+        1
+      ),
+      sendConcurrency: normalizeConcurrency(process.env.SEND_JOB_CONCURRENCY ?? 4),
+      dryRun: false,
+    });
 
-    for (let index = 0; index < recipients.length; index++) {
-      const recipient = recipients[index];
-
-      // Replace template variables per recipient
-      const contact = contactMap.get(recipient.toLowerCase());
-      const vars: Record<string, string> = {
-        email: recipient,
-        ...(contact?.fields ?? {}),
-      };
-      const basePersonalizedHtml = html.replace(
-        /\{\{(\w+)\}\}/g,
-        (_, key) => vars[key.toLowerCase()] ?? `{{${key}}}`
-      );
-      const unsubscribeUrl = buildUnsubscribeUrl({
-        baseUrl,
-        workspaceId,
-        email: recipient,
+    try {
+      await insertSendJobRecipients(jobId, recipients);
+    } catch (error) {
+      await failSendJobWithMessage(
+        jobId,
+        "Failed to persist recipient list for job"
+      ).catch(() => {
+        // no-op
       });
-      const personalizedHtml = appendWorkspaceFooter({
-        html: basePersonalizedHtml,
-        footerHtml: footerHtml ?? "",
-        websiteUrl: websiteUrl ?? "",
-        workspaceId,
-        unsubscribeUrl,
-      });
-      const personalizedSubject = subject.replace(
-        /\{\{(\w+)\}\}/g,
-        (_, key) => vars[key.toLowerCase()] ?? `{{${key}}}`
-      );
-
-      try {
-        const result = await sendEmail({
-          from,
-          to: recipient,
-          subject: personalizedSubject,
-          html: personalizedHtml,
-          configSet,
-        });
-        sent++;
-        if (result.MessageId) {
-          try {
-            await insertSend(workspaceId, result.MessageId, recipient, subject);
-          } catch (dbErr) {
-            console.error(`Failed to record send for ${recipient}:`, dbErr);
-          }
-        }
-      } catch (err) {
-        console.error(`Failed to send to ${recipient}:`, err);
-        errorEmails.push(recipient);
-      }
-      if (index < recipients.length - 1) {
-        await new Promise((r) => setTimeout(r, delay));
-      }
+      throw error;
     }
 
     return NextResponse.json({
-      sent,
-      errors: errorEmails.length,
-      errorEmails,
+      jobId,
+      status: "queued",
+      total: recipients.length,
+      dryRun: false,
     });
   } catch (error) {
-    return apiErrorResponse(error);
+    return apiErrorResponse(error, "Failed to start send job");
   }
+}
+
+function normalizeNonNegativeInteger(
+  value: unknown,
+  fallback: number,
+  min = 0
+): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.floor(parsed));
 }

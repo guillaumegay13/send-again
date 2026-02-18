@@ -5,6 +5,7 @@ import {
   useRef,
   useEffect,
   useCallback,
+  useMemo,
   ChangeEvent,
   FormEvent,
 } from "react";
@@ -43,6 +44,251 @@ interface HistoryItem {
   subject: string;
   sentAt: string;
   events: EmailEvent[];
+}
+
+interface SendJobStatusResponse {
+  id: string;
+  workspaceId: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  total: number;
+  sent: number;
+  failed: number;
+  dryRun: boolean;
+  rateLimit: number;
+  batchSize: number;
+  sendConcurrency: number;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  heartbeatAt: string | null;
+  updatedAt: string;
+  subject: string;
+  errorMessage: string | null;
+  remaining: number;
+  recentErrors: string[];
+  percent: number;
+  isDone: boolean;
+}
+
+type FieldOperator = "equals" | "notEquals" | "contains" | "notContains";
+type ConditionMatchMode = "all" | "any";
+type HistoryEventType = "send" | "delivery" | "open" | "click" | "bounce" | "complaint";
+
+type FieldCondition = {
+  id: string;
+  kind: "field";
+  field: string;
+  operator: FieldOperator;
+  value: string;
+};
+
+type HistoryCondition = {
+  id: string;
+  kind: "history";
+  subject: string;
+  eventType: HistoryEventType;
+  subjectMatch: "exact" | "contains";
+};
+
+type RecipientCondition = FieldCondition | HistoryCondition;
+
+type HistoryEventIndex = Map<HistoryEventType, Map<string, Set<string>>>;
+
+function createConditionId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function parseBooleanLike(value: string): boolean | null {
+  const normalized = value.trim().toLowerCase();
+  if (["true", "1", "yes", "y", "verified"].includes(normalized)) return true;
+  if (["false", "0", "no", "n", "unverified"].includes(normalized)) return false;
+  return null;
+}
+
+function normalizeHistoryEventType(eventType: string): HistoryEventType | null {
+  switch (eventType.trim().toLowerCase()) {
+    case "send":
+      return "send";
+    case "delivery":
+      return "delivery";
+    case "open":
+      return "open";
+    case "click":
+      return "click";
+    case "bounce":
+      return "bounce";
+    case "complaint":
+      return "complaint";
+    default:
+      return null;
+  }
+}
+
+function buildHistoryEventIndex(history: HistoryItem[]): HistoryEventIndex {
+  const index: HistoryEventIndex = new Map();
+
+  for (const item of history) {
+    const subject = item.subject.trim().toLowerCase();
+    if (!subject || !item.recipient) continue;
+    const emailKey = item.recipient.toLowerCase();
+
+    for (const event of item.events) {
+      const type = normalizeHistoryEventType(event.type);
+      if (!type) continue;
+      const eventIndex = index.get(type) ?? new Map<string, Set<string>>();
+      const recipients = eventIndex.get(subject) ?? new Set<string>();
+      recipients.add(emailKey);
+      eventIndex.set(subject, recipients);
+      index.set(type, eventIndex);
+    }
+  }
+
+  return index;
+}
+
+function evaluateFieldCondition(
+  contact: Contact,
+  condition: FieldCondition
+): boolean {
+  const target = condition.field.trim().toLowerCase();
+  if (!target) return false;
+
+  const rawValue = contact.fields[target] ?? "";
+  const expected = condition.value.trim();
+  const actual = rawValue.trim();
+
+  if (
+    !expected &&
+    (condition.operator === "equals" || condition.operator === "notEquals")
+  ) {
+    const matches = actual === "";
+    return condition.operator === "equals" ? matches : !matches;
+  }
+
+  if (condition.operator === "contains" || condition.operator === "notContains") {
+    if (!expected) return false;
+    const contains = actual.toLowerCase().includes(expected.toLowerCase());
+    return condition.operator === "contains" ? contains : !contains;
+  }
+
+  const actualBool = parseBooleanLike(actual);
+  const expectedBool = parseBooleanLike(expected);
+
+  if (actualBool !== null && expectedBool !== null) {
+    const equals = actualBool === expectedBool;
+    return condition.operator === "equals" ? equals : !equals;
+  }
+
+  const equals = actual.toLowerCase() === expected.toLowerCase();
+  return condition.operator === "equals" ? equals : !equals;
+}
+
+function evaluateHistoryCondition(
+  contact: Contact,
+  condition: HistoryCondition,
+  index: HistoryEventIndex
+): boolean {
+  const email = contact.email.toLowerCase();
+  const needle = condition.subject.trim().toLowerCase();
+  if (!needle) return false;
+
+  const subjectMap = index.get(condition.eventType);
+  if (!subjectMap) return false;
+
+  if (condition.subjectMatch === "contains") {
+    for (const [subject, recipients] of subjectMap) {
+      if (!subject.includes(needle)) continue;
+      if (recipients.has(email)) return true;
+    }
+    return false;
+  }
+
+  return subjectMap.get(needle)?.has(email) ?? false;
+}
+
+function evaluateCondition(
+  contact: Contact,
+  mode: ConditionMatchMode,
+  conditions: RecipientCondition[],
+  historyIndex: HistoryEventIndex
+): boolean {
+  if (!conditions.length) return false;
+
+  const tests = conditions.map((condition) => {
+    if (condition.kind === "field") {
+      return evaluateFieldCondition(contact, condition);
+    }
+    return evaluateHistoryCondition(contact, condition, historyIndex);
+  });
+
+  if (mode === "any") {
+    return tests.some(Boolean);
+  }
+
+  return tests.every(Boolean);
+}
+
+const FIELD_OPERATORS: Array<{ value: FieldOperator; label: string }> = [
+  { value: "equals", label: "is" },
+  { value: "notEquals", label: "is not" },
+  { value: "contains", label: "contains" },
+  { value: "notContains", label: "does not contain" },
+];
+
+const HISTORY_EVENTS: HistoryEventType[] = [
+  "send",
+  "delivery",
+  "open",
+  "click",
+  "bounce",
+  "complaint",
+];
+
+const HISTORY_MATCH_OPTIONS: Array<{ value: "exact" | "contains"; label: string }> = [
+  { value: "exact", label: "is" },
+  { value: "contains", label: "contains" },
+];
+
+const CONDITION_MATCH_OPTIONS: Array<{ value: ConditionMatchMode; label: string }> = [
+  { value: "all", label: "Match all rules" },
+  { value: "any", label: "Match any rule" },
+];
+
+function segmentedButtonClass(active: boolean) {
+  return `text-[11px] rounded-full px-2.5 py-1 border transition ${
+    active
+      ? "bg-black text-white border-black shadow-sm"
+      : "bg-white text-gray-600 border-gray-200 hover:border-gray-400 hover:bg-white"
+  }`;
+}
+
+function segmentedSetClass() {
+  return "inline-flex items-center rounded-full p-0.5 border border-gray-200 bg-gray-50 gap-1";
+}
+
+function makeFieldCondition(
+  field = "verified",
+  id: string = createConditionId()
+): FieldCondition {
+  return {
+    id,
+    kind: "field",
+    field,
+    operator: "equals",
+    value: "true",
+  };
+}
+
+function makeHistoryCondition(
+  id: string = createConditionId()
+): HistoryCondition {
+  return {
+    id,
+    kind: "history",
+    subject: "",
+    eventType: "click",
+    subjectMatch: "exact",
+  };
 }
 
 function uniqueEmails(values: string[]): string[] {
@@ -86,11 +332,30 @@ function normalizeEventType(eventType: string): string {
   }
 }
 
+function hasClosingQuoteForField(
+  row: string,
+  startIndex: number,
+  separator: string
+): boolean {
+  for (let i = startIndex + 1; i < row.length; i++) {
+    if (row[i] !== "\"") continue;
+    if (row[i + 1] === "\"") {
+      i++;
+      continue;
+    }
+    let tail = i + 1;
+    while (tail < row.length && row[tail] === " ") {
+      tail++;
+    }
+    return tail === row.length || row[tail] === separator;
+  }
+  return false;
+}
+
 function parseDelimitedRow(row: string, separator: string): string[] {
   const values: string[] = [];
   let current = "";
   let inQuotes = false;
-  let openedQuotedField = false;
 
   for (let i = 0; i < row.length; i++) {
     const char = row[i];
@@ -103,9 +368,11 @@ function parseDelimitedRow(row: string, separator: string): string[] {
         } else {
           inQuotes = false;
         }
-      } else if (current.trim().length === 0) {
+      } else if (
+        current.trim().length === 0 &&
+        hasClosingQuoteForField(row, i, separator)
+      ) {
         inQuotes = true;
-        openedQuotedField = true;
         current = "";
       } else {
         current += char;
@@ -116,23 +383,22 @@ function parseDelimitedRow(row: string, separator: string): string[] {
     if (char === separator && !inQuotes) {
       values.push(current.trim());
       current = "";
-      openedQuotedField = false;
       continue;
     }
 
     current += char;
   }
 
-  if (inQuotes && openedQuotedField) {
-    current = `"${current}`;
-  }
   values.push(current.trim());
 
   return values;
 }
 
 function normalizeCSVValue(value: string): string {
-  return value.trim().replace(/"/g, "").replace(/^'+/, "");
+  return value
+    .trim()
+    .replace(/^"+|"+$/g, "")
+    .replace(/^'+|'+$/g, "");
 }
 
 function parseCSV(text: string): Contact[] {
@@ -223,10 +489,18 @@ export default function ComposePage() {
   );
   const [newContact, setNewContact] = useState("");
 
-  const contacts = activeId ? contactsMap[activeId] ?? [] : [];
+  const contacts = useMemo(
+    () => (activeId ? contactsMap[activeId] ?? [] : []),
+    [contactsMap, activeId]
+  );
 
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [recipientConditions, setRecipientConditions] = useState<
+    RecipientCondition[]
+  >([]);
+  const [conditionMatchMode, setConditionMatchMode] =
+    useState<ConditionMatchMode>("all");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -235,6 +509,10 @@ export default function ComposePage() {
   const [html, setHtml] = useState("");
   const [dryRun, setDryRun] = useState(true);
   const [sending, setSending] = useState(false);
+  const [activeSendJobId, setActiveSendJobId] = useState<string | null>(null);
+  const [activeSendJob, setActiveSendJob] = useState<SendJobStatusResponse | null>(
+    null
+  );
   const [result, setResult] = useState<string | null>(null);
   const [bodyVibePrompt, setBodyVibePrompt] = useState("");
   const [footerVibePrompt, setFooterVibePrompt] = useState("");
@@ -247,6 +525,8 @@ export default function ComposePage() {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settingsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const contactDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sendJobPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const sendJobInFlightRef = useRef(false);
 
   const authFetch = useCallback(
     async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -275,6 +555,46 @@ export default function ComposePage() {
     },
     [authFetch]
   );
+
+  const stopSendPolling = useCallback(() => {
+    if (sendJobPollRef.current) {
+      clearInterval(sendJobPollRef.current);
+      sendJobPollRef.current = null;
+    }
+    sendJobInFlightRef.current = false;
+  }, []);
+
+  const pollSendJob = useCallback(async () => {
+    if (!activeSendJobId) return;
+    if (sendJobInFlightRef.current) return;
+    sendJobInFlightRef.current = true;
+
+    try {
+      const status = await fetchJson<SendJobStatusResponse>(
+        `/api/send/status?jobId=${encodeURIComponent(activeSendJobId)}`
+      );
+      setActiveSendJob(status);
+
+      if (status.isDone) {
+        stopSendPolling();
+        setSending(false);
+        setActiveSendJobId(null);
+        const totalFailed = status.failed;
+        const summary = `Done: ${status.sent} sent${totalFailed > 0 ? ` · ${totalFailed} failed` : ""}`;
+        setResult(
+          status.status === "failed"
+            ? `${summary}. Job failed.`
+            : status.errorMessage
+            ? `${summary}. ${status.errorMessage}`
+            : summary
+        );
+      }
+    } catch (error) {
+      console.error("Failed to poll send job:", error);
+    } finally {
+      sendJobInFlightRef.current = false;
+    }
+  }, [activeSendJobId, fetchJson, stopSendPolling]);
 
   useEffect(() => {
     const supabase = getBrowserSupabaseClient();
@@ -373,17 +693,46 @@ export default function ComposePage() {
   useEffect(() => {
     setBodyVibeStatus(null);
     setFooterVibeStatus(null);
-  }, [activeId]);
+  }, [activeId, stopSendPolling]);
 
   useEffect(() => {
     if (!sessionToken) return;
-    if (tab !== "history" || !activeId) return;
+    if (!activeId) return;
     setHistoryLoading(true);
     fetchJson<HistoryItem[]>(`/api/history?workspace=${encodeURIComponent(activeId)}`)
       .then((data) => setHistory(data))
       .catch(console.error)
       .finally(() => setHistoryLoading(false));
-  }, [sessionToken, tab, activeId, fetchJson]);
+  }, [sessionToken, activeId, fetchJson]);
+
+  useEffect(() => {
+    stopSendPolling();
+    setSending(false);
+    setActiveSendJobId(null);
+    setActiveSendJob(null);
+    setResult(null);
+    setRecipientConditions([]);
+    setConditionMatchMode("all");
+  }, [activeId, stopSendPolling]);
+
+  useEffect(() => {
+    if (!activeSendJobId) {
+      return;
+    }
+
+    pollSendJob();
+    sendJobPollRef.current = setInterval(pollSendJob, 1400);
+
+    return () => {
+      stopSendPolling();
+    };
+  }, [activeSendJobId, pollSendJob, stopSendPolling]);
+
+  useEffect(() => {
+    return () => {
+      stopSendPolling();
+    };
+  }, [stopSendPolling]);
 
   async function handleSignIn() {
     setLoggingIn(true);
@@ -703,6 +1052,87 @@ export default function ComposePage() {
     );
   }
 
+  const allFieldKeys = useMemo(
+    () =>
+      Array.from(new Set(contacts.flatMap((c) => Object.keys(c.fields)))).sort(),
+    [contacts]
+  );
+  const availableFieldKeys = useMemo(
+    () => {
+      const keys = new Set(["verified", ...allFieldKeys]);
+      return Array.from(keys).sort();
+    },
+    [allFieldKeys]
+  );
+  const availableSubjects = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          history
+            .map((item) => item.subject.trim())
+            .filter(Boolean)
+        )
+      ).sort(),
+    [history]
+  );
+  const historyEventIndex = useMemo(
+    () => buildHistoryEventIndex(history),
+    [history]
+  );
+
+  const conditionMatchedRecipients = useMemo(() => {
+    if (!recipientConditions.length || contacts.length === 0) return [];
+    const matched = contacts.filter((contact) =>
+      evaluateCondition(contact, conditionMatchMode, recipientConditions, historyEventIndex)
+    );
+    return uniqueEmails(matched.map((c) => c.email));
+  }, [
+    contacts,
+    recipientConditions,
+    conditionMatchMode,
+    historyEventIndex,
+  ]);
+
+  function addFieldCondition() {
+    setRecipientConditions((prev) => [...prev, makeFieldCondition(availableFieldKeys[0] ?? "verified")]);
+  }
+
+  function addHistoryCondition() {
+    setRecipientConditions((prev) => [...prev, makeHistoryCondition()]);
+  }
+
+  function setCondition(id: string, patch: Partial<RecipientCondition>) {
+    setRecipientConditions((prev) =>
+      prev.map((condition) =>
+        condition.id !== id
+          ? condition
+          : ({ ...condition, ...patch } as RecipientCondition)
+      )
+    );
+  }
+
+  function setConditionType(id: string, kind: RecipientCondition["kind"]) {
+    if (kind === "field") {
+      setCondition(id, makeFieldCondition(availableFieldKeys[0] ?? "verified", id));
+      return;
+    }
+    setCondition(id, makeHistoryCondition(id));
+  }
+
+  function removeCondition(id: string) {
+    setRecipientConditions((prev) => prev.filter((condition) => condition.id !== id));
+  }
+
+  function importMatchedRecipients() {
+    if (!conditionMatchedRecipients.length) return;
+    setTo((prev) =>
+      uniqueEmails([
+        ...prev.split("\n").map((value) => value.trim()).filter(Boolean),
+        ...conditionMatchedRecipients,
+      ]).join("\n")
+    );
+  }
+
   const updatePreview = useCallback((htmlContent: string, sampleVars: Record<string, string>) => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(async () => {
@@ -746,7 +1176,10 @@ export default function ComposePage() {
       .map((e) => e.trim())
       .filter(Boolean)
   );
-  const recipients = manualRecipients;
+  const recipients = uniqueEmails([
+    ...manualRecipients,
+    ...conditionMatchedRecipients,
+  ]);
 
   // Build sample variables from first recipient's contact data
   const firstRecipient = recipients[0] ?? "";
@@ -781,11 +1214,6 @@ export default function ComposePage() {
   });
   const footerPreviewDoc = buildPreviewDocument(footerPreviewHtml);
 
-  // Compute all field keys across contacts for column headers and variable hints
-  const allFieldKeys = Array.from(
-    new Set(contacts.flatMap((c) => Object.keys(c.fields)))
-  );
-
   const sampleFieldsJson = JSON.stringify(sampleContact?.fields ?? {});
   useEffect(() => {
     updatePreview(html, sampleVars);
@@ -802,13 +1230,16 @@ export default function ComposePage() {
       return;
     }
     setSending(true);
+    setActiveSendJobId(null);
+    setActiveSendJob(null);
     setResult(null);
     try {
       const data = await fetchJson<{
         sent: number;
         dryRun?: boolean;
-        errors?: number;
-        errorEmails?: string[];
+        jobId?: string;
+        status?: "queued" | "running";
+        total?: number;
       }>("/api/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -827,16 +1258,19 @@ export default function ComposePage() {
       });
       if (data.dryRun) {
         setResult(`Dry run: ${data.sent} email(s) would be sent.`);
+        setSending(false);
       } else {
-        let msg = `Sent: ${data.sent}`;
-        if ((data.errors ?? 0) > 0) {
-          msg += ` | Errors: ${data.errors} (${(data.errorEmails ?? []).join(", ")})`;
+        if (!data.jobId) {
+          setResult("Failed to start send job.");
+          setSending(false);
+          return;
         }
-        setResult(msg);
+        setActiveSendJobId(data.jobId);
+        setResult(`Queued ${data.total ?? recipients.length} recipients`);
+        pollSendJob();
       }
     } catch (err) {
       setResult(`Error: ${err}`);
-    } finally {
       setSending(false);
     }
   }
@@ -1119,8 +1553,9 @@ export default function ComposePage() {
                   <span className="text-sm font-medium text-gray-600">
                     To{" "}
                     <span className="text-gray-400 font-normal">
-                      (one per line)
+                      ({recipients.length} selected)
                     </span>
+                    <span className="text-gray-400 font-normal">{" "} · one per line</span>
                   </span>
                   {contacts.length > 0 && (
                     <button
@@ -1139,6 +1574,220 @@ export default function ComposePage() {
                   placeholder="recipient@example.com"
                   className="border border-gray-300 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-black resize-none"
                 />
+              </label>
+
+              <label className="rounded border border-gray-200 bg-gray-50 p-3">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div>
+                    <p className="text-sm font-medium text-gray-700">Recipient Conditions</p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      Combine conditions with manual input to build the final recipient
+                      list.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className={segmentedSetClass()}>
+                      {CONDITION_MATCH_OPTIONS.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => setConditionMatchMode(option.value)}
+                          className={segmentedButtonClass(
+                            conditionMatchMode === option.value
+                          )}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={addFieldCondition}
+                      className="text-xs text-black border border-gray-300 rounded px-2 py-1 hover:bg-white"
+                    >
+                      + Field Rule
+                    </button>
+                    <button
+                      type="button"
+                      onClick={addHistoryCondition}
+                      className="text-xs text-black border border-gray-300 rounded px-2 py-1 hover:bg-white"
+                    >
+                      + History Rule
+                    </button>
+                    <button
+                      type="button"
+                      onClick={importMatchedRecipients}
+                      disabled={!conditionMatchedRecipients.length}
+                      className="text-xs text-black border border-gray-300 rounded px-2 py-1 hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Import Matched ({conditionMatchedRecipients.length})
+                    </button>
+                  </div>
+                </div>
+                {recipientConditions.length === 0 ? (
+                  <p className="mt-2 text-xs text-gray-500">
+                    No dynamic rules yet. Add one to target contacts by field or history
+                    behavior.
+                  </p>
+                ) : (
+                  <div className="mt-2 space-y-2">
+                    {recipientConditions.map((condition) => (
+                      <div
+                        key={condition.id}
+                        className="border border-gray-200 rounded-md bg-white p-2"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className={segmentedSetClass()}>
+                            <button
+                              type="button"
+                              onClick={() => setConditionType(condition.id, "field")}
+                              className={segmentedButtonClass(condition.kind === "field")}
+                            >
+                              Field
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setConditionType(condition.id, "history")
+                              }
+                              className={segmentedButtonClass(condition.kind === "history")}
+                            >
+                              History
+                            </button>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => removeCondition(condition.id)}
+                            className="text-xs text-red-500 hover:text-red-700"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                        {condition.kind === "field" ? (
+                          <div className="mt-2 grid sm:grid-cols-3 gap-2">
+                            <label className="flex flex-col gap-1">
+                              <span className="text-[11px] text-gray-500">Field</span>
+                              <input
+                                list="recipient-field-keys"
+                                value={condition.field}
+                                onChange={(e) =>
+                                  setCondition(condition.id, { field: e.target.value })
+                                }
+                                className="border border-gray-300 rounded px-2 py-1 text-sm"
+                                placeholder="verified, company..."
+                              />
+                            </label>
+                            <label className="flex flex-col gap-1">
+                              <span className="text-[11px] text-gray-500">Operator</span>
+                              <div className="flex flex-wrap gap-1.5">
+                                {FIELD_OPERATORS.map((option) => (
+                                  <button
+                                    key={option.value}
+                                    type="button"
+                                    onClick={() =>
+                                      setCondition(condition.id, {
+                                        operator: option.value,
+                                      })
+                                    }
+                                    className={segmentedButtonClass(
+                                      condition.operator === option.value
+                                    )}
+                                  >
+                                    {option.label}
+                                  </button>
+                                ))}
+                              </div>
+                            </label>
+                            <label className="flex flex-col gap-1">
+                              <span className="text-[11px] text-gray-500">Value</span>
+                              <input
+                                value={condition.value}
+                                onChange={(e) =>
+                                  setCondition(condition.id, {
+                                    value: e.target.value,
+                                  })
+                                }
+                                className="border border-gray-300 rounded px-2 py-1 text-sm"
+                                placeholder="true"
+                              />
+                            </label>
+                          </div>
+                        ) : (
+                          <div className="mt-2 grid sm:grid-cols-3 gap-2">
+                            <label className="flex flex-col gap-1">
+                              <span className="text-[11px] text-gray-500">
+                                Subject Match
+                              </span>
+                              <input
+                                list="recipient-subjects"
+                                value={condition.subject}
+                                onChange={(e) =>
+                                  setCondition(condition.id, {
+                                    subject: e.target.value,
+                                  })
+                                }
+                                className="border border-gray-300 rounded px-2 py-1 text-sm"
+                                placeholder="subject text..."
+                              />
+                            </label>
+                            <label className="flex flex-col gap-1">
+                              <span className="text-[11px] text-gray-500">
+                                Match mode
+                              </span>
+                              <div className={segmentedSetClass()}>
+                                {HISTORY_MATCH_OPTIONS.map((option) => (
+                                  <button
+                                    key={option.value}
+                                    type="button"
+                                    onClick={() =>
+                                      setCondition(condition.id, {
+                                        subjectMatch: option.value,
+                                      })
+                                    }
+                                    className={segmentedButtonClass(
+                                      condition.subjectMatch === option.value
+                                    )}
+                                  >
+                                    {option.label}
+                                  </button>
+                                ))}
+                              </div>
+                            </label>
+                            <label className="flex flex-col gap-1">
+                              <span className="text-[11px] text-gray-500">Event</span>
+                              <div className={`${segmentedSetClass()} flex-wrap`}>
+                                {HISTORY_EVENTS.map((event) => (
+                                  <button
+                                    key={event}
+                                    type="button"
+                                    onClick={() =>
+                                      setCondition(condition.id, { eventType: event })
+                                    }
+                                    className={segmentedButtonClass(
+                                      condition.eventType === event
+                                    )}
+                                  >
+                                    {event}
+                                  </button>
+                                ))}
+                              </div>
+                            </label>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <datalist id="recipient-field-keys">
+                  {availableFieldKeys.map((key) => (
+                    <option key={key} value={key} />
+                  ))}
+                </datalist>
+                <datalist id="recipient-subjects">
+                  {availableSubjects.map((subject) => (
+                    <option key={subject} value={subject} />
+                  ))}
+                </datalist>
               </label>
 
               <label className="flex flex-col gap-1">
@@ -1228,15 +1877,53 @@ export default function ComposePage() {
                 </span>
               </div>
 
+              <div className="text-xs text-gray-500">
+                Manual recipients: {manualRecipients.length}. Dynamic recipients:
+                {" "}
+                {conditionMatchedRecipients.length}. Total: {recipients.length}.
+              </div>
+
               <button
                 onClick={handleSend}
                 disabled={sending}
                 className="mt-2 bg-black text-white rounded px-4 py-2 text-sm font-medium hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed w-fit"
               >
-                {sending
-                  ? "Sending..."
-                  : `Send${recipients.length > 1 ? ` (${recipients.length})` : ""}`}
+                {sending && activeSendJob
+                  ? `Processing... ${activeSendJob.sent + activeSendJob.failed}/${activeSendJob.total}`
+                  : sending
+                    ? "Sending..."
+                    : `Send${recipients.length > 1 ? ` (${recipients.length})` : ""}`}
               </button>
+
+              {activeSendJob && (
+                <div className="mt-2 rounded border border-gray-200 bg-white px-3 py-2 text-xs text-gray-600">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium text-gray-700">
+                      Job {activeSendJob.status.toUpperCase()}
+                    </span>
+                    <span>
+                      {activeSendJob.sent + activeSendJob.failed}/{activeSendJob.total}
+                    </span>
+                  </div>
+                  <div className="mt-2 h-2 rounded bg-gray-100 overflow-hidden">
+                    <div
+                      className="h-full bg-black transition-all"
+                      style={{ width: `${Math.min(100, Math.round(activeSendJob.percent))}%` }}
+                    />
+                  </div>
+                  <div className="mt-1 text-[11px]">
+                    {Math.round(activeSendJob.percent)}% complete
+                    {activeSendJob.errorMessage ? ` · ${activeSendJob.errorMessage}` : ""}
+                  </div>
+                  {activeSendJob.recentErrors.length > 0 && (
+                    <ul className="mt-2 text-[11px] text-red-600 space-y-0.5">
+                      {activeSendJob.recentErrors.slice(0, 3).map((error) => (
+                        <li key={error}>• {error}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
 
               {result && (
                 <div className="text-sm px-3 py-2 rounded bg-gray-100 border border-gray-200 font-mono">

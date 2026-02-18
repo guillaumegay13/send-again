@@ -236,6 +236,37 @@ export async function deleteAllContacts(workspaceId: string): Promise<void> {
   assertNoError(error, "Failed to delete all contacts");
 }
 
+export async function getContactsByEmails(
+  workspaceId: string,
+  emails: string[]
+): Promise<DbContact[]> {
+  const sanitized = Array.from(
+    new Set(
+      emails.map((email) => email.trim().toLowerCase()).filter(Boolean)
+    )
+  );
+
+  const normalized = sanitized.slice(0, 2000);
+
+  if (normalized.length === 0) {
+    return [];
+  }
+
+  const db = getDb();
+  const { data, error } = await db
+    .from("contacts")
+    .select("email, fields")
+    .eq("workspace_id", workspaceId)
+    .in("email", normalized);
+  assertNoError(error, "Failed to fetch contacts by email");
+
+  const rows = (data ?? []) as ContactRow[];
+  return rows.map((row) => ({
+    email: row.email.toLowerCase(),
+    fields: normalizeFields(row.fields),
+  }));
+}
+
 // --- Workspace Settings ---
 
 export interface DbWorkspaceSettings {
@@ -456,4 +487,681 @@ export async function getSendHistory(
     sent_at: send.sent_at,
     events: JSON.stringify(eventsByMessageId.get(send.message_id) ?? []),
   }));
+}
+
+export type SendJobStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type SendJobRecipientStatus =
+  | "pending"
+  | "sending"
+  | "sent"
+  | "failed";
+
+export interface SendJobPayload {
+  workspaceId: string;
+  from: string;
+  subject: string;
+  html: string;
+  configSet: string;
+  rateLimit: number;
+  footerHtml: string;
+  websiteUrl: string;
+  baseUrl: string;
+}
+
+export interface SendJobProgress {
+  id: string;
+  workspaceId: string;
+  status: SendJobStatus;
+  total: number;
+  sent: number;
+  failed: number;
+  dryRun: boolean;
+  rateLimit: number;
+  batchSize: number;
+  sendConcurrency: number;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  heartbeatAt: string | null;
+  updatedAt: string;
+  subject: string;
+  errorMessage: string | null;
+  remaining: number;
+  recentErrors: string[];
+}
+
+export interface SendJobSummary {
+  id: string;
+  workspaceId: string;
+  status: SendJobStatus;
+  total: number;
+  sent: number;
+  failed: number;
+  dryRun: boolean;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  heartbeatAt: string | null;
+  updatedAt: string;
+  subject: string;
+  errorMessage: string | null;
+}
+
+interface SendJobRowRaw {
+  id: string;
+  workspace_id: string;
+  user_id: string;
+  status: string;
+  total: number;
+  sent: number;
+  failed: number;
+  dry_run: boolean;
+  payload: unknown;
+  rate_limit: number;
+  batch_size: number;
+  send_concurrency: number;
+  error_message: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  heartbeat_at: string | null;
+  updated_at: string;
+}
+
+interface SendJobWorkerContext {
+  id: string;
+  workspaceId: string;
+  userId: string;
+  status: SendJobStatus;
+  total: number;
+  sent: number;
+  failed: number;
+  dryRun: boolean;
+  payload: SendJobPayload;
+  rateLimit: number;
+  batchSize: number;
+  sendConcurrency: number;
+}
+
+function normalizeNonNegativeInteger(
+  value: unknown,
+  fallback: number,
+  min = 0
+): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.floor(parsed));
+}
+
+function normalizeSendJobPayload(value: unknown): SendJobPayload {
+  const payload =
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+
+  const workspaceId = String(payload.workspaceId ?? "").trim().toLowerCase();
+  const from = String(payload.from ?? "").trim();
+  const subject = String(payload.subject ?? "").trim();
+  const html = String(payload.html ?? "").trim();
+  const configSet = String(payload.configSet ?? "email-tracking-config-set").trim();
+  const footerHtml = String(payload.footerHtml ?? "").trim();
+  const websiteUrl = String(payload.websiteUrl ?? "").trim();
+  const baseUrl = String(payload.baseUrl ?? "").trim();
+  const rateLimit = normalizeNonNegativeInteger(payload.rateLimit, 300);
+
+  if (!workspaceId || !from || !subject || !html || !baseUrl) {
+    throw new Error("Invalid send job payload");
+  }
+
+  return {
+    workspaceId,
+    from,
+    subject,
+    html,
+    configSet,
+    rateLimit,
+    footerHtml,
+    websiteUrl,
+    baseUrl,
+  };
+}
+
+function normalizeSendJobStatus(value: string): SendJobStatus {
+  if (value === "queued") return "queued";
+  if (value === "running") return "running";
+  if (value === "completed") return "completed";
+  if (value === "failed") return "failed";
+  if (value === "cancelled") return "cancelled";
+  return "queued";
+}
+
+function normalizeSendJobRow(row: SendJobRowRaw): SendJobPayload & {
+  id: string;
+  userId: string;
+  status: SendJobStatus;
+  total: number;
+  sent: number;
+  failed: number;
+  dryRun: boolean;
+  rateLimit: number;
+  batchSize: number;
+  sendConcurrency: number;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  heartbeatAt: string | null;
+  updatedAt: string;
+  errorMessage: string | null;
+} {
+  const payload = normalizeSendJobPayload(row.payload);
+  return {
+    id: row.id,
+    workspaceId: payload.workspaceId,
+    from: payload.from,
+    subject: payload.subject,
+    html: payload.html,
+    configSet: payload.configSet,
+    rateLimit: normalizeNonNegativeInteger(row.rate_limit, payload.rateLimit),
+    footerHtml: payload.footerHtml,
+    websiteUrl: payload.websiteUrl,
+    baseUrl: payload.baseUrl,
+    userId: row.user_id,
+    status: normalizeSendJobStatus(row.status),
+    total: normalizeNonNegativeInteger(row.total, 0),
+    sent: normalizeNonNegativeInteger(row.sent, 0),
+    failed: normalizeNonNegativeInteger(row.failed, 0),
+    dryRun: !!row.dry_run,
+    batchSize: normalizeNonNegativeInteger(row.batch_size, 50, 1),
+    sendConcurrency: normalizeNonNegativeInteger(row.send_concurrency, 1, 1),
+    createdAt: row.created_at,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    heartbeatAt: row.heartbeat_at,
+    updatedAt: row.updated_at,
+    errorMessage: row.error_message ?? null,
+  };
+}
+
+export async function createSendJob(params: {
+  userId: string;
+  payload: SendJobPayload;
+  totalRecipients: number;
+  rateLimit?: number;
+  batchSize: number;
+  sendConcurrency: number;
+  dryRun: boolean;
+}): Promise<string> {
+  const db = getDb();
+  const id = crypto.randomUUID();
+
+  const payload = {
+    workspaceId: params.payload.workspaceId,
+    from: params.payload.from,
+    subject: params.payload.subject,
+    html: params.payload.html,
+    configSet: params.payload.configSet,
+    rateLimit: params.payload.rateLimit,
+    footerHtml: params.payload.footerHtml,
+    websiteUrl: params.payload.websiteUrl,
+    baseUrl: params.payload.baseUrl,
+  };
+
+  const { error } = await db.from("send_jobs").insert({
+    id,
+    workspace_id: params.payload.workspaceId,
+    user_id: params.userId,
+    status: "queued",
+    total: normalizeNonNegativeInteger(params.totalRecipients, 0),
+    sent: 0,
+    failed: 0,
+    dry_run: params.dryRun,
+    payload,
+    rate_limit: normalizeNonNegativeInteger(
+      params.rateLimit ?? params.payload.rateLimit,
+      params.payload.rateLimit
+    ),
+    batch_size: normalizeNonNegativeInteger(params.batchSize, 50, 1),
+    send_concurrency: normalizeNonNegativeInteger(params.sendConcurrency, 4, 1),
+  });
+  assertNoError(error, "Failed to create send job");
+
+  return id;
+}
+
+export async function insertSendJobRecipients(
+  jobId: string,
+  recipients: string[]
+): Promise<void> {
+  const deduped = Array.from(
+    new Set(recipients.map((recipient) => recipient.trim().toLowerCase()))
+  ).filter(Boolean);
+
+  if (deduped.length === 0) {
+    return;
+  }
+
+  const chunkSize = 500;
+  const db = getDb();
+
+  for (let i = 0; i < deduped.length; i += chunkSize) {
+    const chunk = deduped
+      .slice(i, i + chunkSize)
+      .map((recipient) => ({
+        job_id: jobId,
+        recipient,
+        status: "pending",
+      }));
+
+    const { error } = await db
+      .from("send_job_recipients")
+      .upsert(chunk, { onConflict: "job_id,recipient" })
+      .select("id");
+    assertNoError(error, "Failed to store send job recipients");
+  }
+}
+
+export async function getSendJobForUser(
+  jobId: string,
+  userId: string
+): Promise<SendJobProgress | null> {
+  const db = getDb();
+  const { data, error } = await db
+    .from("send_jobs")
+    .select(
+      "id, user_id, workspace_id, status, total, sent, failed, dry_run, payload, rate_limit, batch_size, send_concurrency, error_message, created_at, started_at, completed_at, heartbeat_at, updated_at"
+    )
+    .eq("id", jobId)
+    .eq("user_id", userId)
+    .limit(1);
+  assertNoError(error, "Failed to read send job");
+
+  const row = (data ?? [])[0];
+  if (!row) return null;
+
+  const normalized = normalizeSendJobRow(row as SendJobRowRaw);
+
+  const { data: errorRows, error: errorRowsError } = await db
+    .from("send_job_recipients")
+    .select("recipient,error")
+    .eq("job_id", jobId)
+    .eq("status", "failed")
+    .order("id", { ascending: false })
+    .limit(5);
+  assertNoError(errorRowsError, "Failed to load send job errors");
+
+  const recentErrors =
+    (errorRows ?? []).map((item) => {
+      const recipientError = String((item as { recipient: string; error: string | null }).error ?? "");
+      return recipientError
+        ? `${item.recipient}: ${recipientError}`
+        : `${item.recipient}: send failed`;
+    }) ?? [];
+
+  return {
+    id: normalized.id,
+    workspaceId: normalized.workspaceId,
+    status: normalized.status,
+    total: normalized.total,
+    sent: normalized.sent,
+    failed: normalized.failed,
+    dryRun: normalized.dryRun,
+    rateLimit: normalized.rateLimit,
+    batchSize: normalized.batchSize,
+    sendConcurrency: normalized.sendConcurrency,
+    createdAt: normalized.createdAt,
+    startedAt: normalized.startedAt,
+    completedAt: normalized.completedAt,
+    heartbeatAt: normalized.heartbeatAt,
+    updatedAt: normalized.updatedAt,
+    subject: normalized.subject,
+    errorMessage: normalized.errorMessage,
+    remaining: Math.max(0, normalized.total - normalized.sent - normalized.failed),
+    recentErrors,
+  };
+}
+
+interface SendJobsQuery {
+  workspaceId?: string;
+  statuses?: SendJobStatus[];
+  limit?: number;
+}
+
+export async function getSendJobsForUser(
+  userId: string,
+  options: SendJobsQuery = {}
+): Promise<SendJobSummary[]> {
+  const db = getDb();
+  const query = db
+    .from("send_jobs")
+    .select(
+      "id, workspace_id, user_id, status, total, sent, failed, dry_run, payload, rate_limit, batch_size, send_concurrency, error_message, created_at, started_at, completed_at, heartbeat_at, updated_at"
+    )
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false });
+
+  if (options.workspaceId) {
+    query.eq("workspace_id", options.workspaceId);
+  }
+
+  if (options.statuses && options.statuses.length > 0) {
+    query.in("status", options.statuses);
+  }
+
+  const limited = Math.max(1, Math.floor(options.limit ?? 50));
+  query.limit(limited);
+
+  const { data, error } = await query;
+  assertNoError(error, "Failed to read send jobs");
+
+  return ((data ?? []) as SendJobRowRaw[]).map((row) => {
+    const normalized = normalizeSendJobRow(row);
+    return {
+      id: normalized.id,
+      workspaceId: normalized.workspaceId,
+      status: normalized.status,
+      total: normalized.total,
+      sent: normalized.sent,
+      failed: normalized.failed,
+      dryRun: normalized.dryRun,
+      createdAt: normalized.createdAt,
+      startedAt: normalized.startedAt,
+      completedAt: normalized.completedAt,
+      heartbeatAt: normalized.heartbeatAt,
+      updatedAt: normalized.updatedAt,
+      subject: normalized.subject,
+      errorMessage: normalized.errorMessage,
+    };
+  });
+}
+
+export async function getQueuedOrRunningSendJobs(
+  limit = 1
+): Promise<SendJobRowRaw[]> {
+  const db = getDb();
+  const { data, error } = await db
+    .from("send_jobs")
+    .select(
+      "id, workspace_id, user_id, status, total, sent, failed, dry_run, payload, rate_limit, batch_size, send_concurrency, error_message, created_at, started_at, completed_at, heartbeat_at, updated_at"
+    )
+    .in("status", ["queued", "running"])
+    .order("created_at", { ascending: true })
+    .limit(limit);
+  assertNoError(error, "Failed to load send jobs");
+  return (data ?? []) as SendJobRowRaw[];
+}
+
+export async function getSendJobWorkerContext(
+  jobId: string
+): Promise<SendJobWorkerContext | null> {
+  const db = getDb();
+  const { data, error } = await db
+    .from("send_jobs")
+    .select(
+      "id, workspace_id, user_id, status, total, sent, failed, dry_run, payload, rate_limit, batch_size, send_concurrency"
+    )
+    .eq("id", jobId)
+    .limit(1);
+  assertNoError(error, "Failed to load send job");
+
+  const row = (data ?? [])[0];
+  if (!row) return null;
+
+  const normalized = normalizeSendJobRow(row as SendJobRowRaw);
+  return {
+    id: normalized.id,
+    workspaceId: normalized.workspaceId,
+    userId: normalized.userId,
+    status: normalized.status,
+    total: normalized.total,
+    sent: normalized.sent,
+    failed: normalized.failed,
+    dryRun: normalized.dryRun,
+    payload: {
+      workspaceId: normalized.workspaceId,
+      from: normalized.from,
+      subject: normalized.subject,
+      html: normalized.html,
+      configSet: normalized.configSet,
+      rateLimit: normalized.rateLimit,
+      footerHtml: normalized.footerHtml,
+      websiteUrl: normalized.websiteUrl,
+      baseUrl: normalized.baseUrl,
+    },
+    rateLimit: normalized.rateLimit,
+    batchSize: normalized.batchSize,
+    sendConcurrency: normalized.sendConcurrency,
+  };
+}
+
+export async function claimQueuedSendJob(jobId: string): Promise<boolean> {
+  const now = new Date().toISOString();
+  const db = getDb();
+  const { data, error } = await db
+    .from("send_jobs")
+    .update({ status: "running", started_at: now, heartbeat_at: now, updated_at: now })
+    .eq("id", jobId)
+    .eq("status", "queued")
+    .select("id");
+  assertNoError(error, "Failed to claim send job");
+  return (data ?? []).length > 0;
+}
+
+export async function claimStaleRunningSendJob(
+  jobId: string,
+  heartbeatAt: string | null
+): Promise<boolean> {
+  const now = new Date().toISOString();
+  const db = getDb();
+  let query = db
+    .from("send_jobs")
+    .update({ started_at: now, heartbeat_at: now, updated_at: now })
+    .eq("id", jobId)
+    .eq("status", "running")
+    .select("id");
+
+  if (heartbeatAt === null) {
+    query = query.is("heartbeat_at", null);
+  } else {
+    query = query.eq("heartbeat_at", heartbeatAt);
+  }
+
+  const { data, error } = await query;
+  assertNoError(error, "Failed to re-claim send job");
+  return (data ?? []).length > 0;
+}
+
+export async function markSendJobHeartbeat(jobId: string): Promise<void> {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const { error } = await db
+    .from("send_jobs")
+    .update({ heartbeat_at: now, updated_at: now })
+    .eq("id", jobId);
+  assertNoError(error, "Failed to heartbeat send job");
+}
+
+export async function requeueStaleSendingRecipients(
+  jobId: string,
+  startedBefore: string
+): Promise<void> {
+  const db = getDb();
+  const { error } = await db
+    .from("send_job_recipients")
+    .update({ status: "pending" })
+    .eq("job_id", jobId)
+    .eq("status", "sending")
+    .lt("started_at", startedBefore);
+  assertNoError(error, "Failed to reset stale recipients");
+}
+
+export async function getPendingSendJobRecipients(
+  jobId: string,
+  limit: number
+): Promise<Array<{ id: number; recipient: string }>> {
+  const db = getDb();
+  const boundedLimit = Math.max(1, Math.floor(limit));
+  const { data, error } = await db
+    .from("send_job_recipients")
+    .select("id, recipient")
+    .eq("job_id", jobId)
+    .eq("status", "pending")
+    .order("id", { ascending: true })
+    .limit(boundedLimit);
+  assertNoError(error, "Failed to load send job recipients");
+  return ((data ?? []) as { id: number; recipient: string }[]).map((row) => ({
+    id: row.id,
+    recipient: row.recipient,
+  }));
+}
+
+export async function claimSendJobRecipients(
+  jobId: string,
+  recipientIds: number[]
+): Promise<Array<{ id: number; recipient: string }>> {
+  if (recipientIds.length === 0) return [];
+
+  const now = new Date().toISOString();
+  const db = getDb();
+  const { data, error } = await db
+    .from("send_job_recipients")
+    .update({ status: "sending", started_at: now })
+    .in("id", recipientIds)
+    .eq("job_id", jobId)
+    .eq("status", "pending")
+    .select("id, recipient");
+  assertNoError(error, "Failed to claim send job recipients");
+  return ((data ?? []) as Array<{ id: number; recipient: string }>).map((row) => ({
+    id: row.id,
+    recipient: row.recipient,
+  }));
+}
+
+export async function markSendJobRecipientSent(
+  id: number,
+  messageId: string | null
+): Promise<void> {
+  const now = new Date().toISOString();
+  const db = getDb();
+  const { error } = await db
+    .from("send_job_recipients")
+    .update({
+      status: "sent",
+      message_id: messageId,
+      processed_at: now,
+      error: null,
+      last_error_at: null,
+    })
+    .eq("id", id);
+  assertNoError(error, "Failed to mark send job recipient as sent");
+}
+
+export async function markSendJobRecipientFailed(
+  id: number,
+  message: string
+): Promise<void> {
+  const now = new Date().toISOString();
+  const db = getDb();
+  const { error } = await db
+    .from("send_job_recipients")
+    .update({
+      status: "failed",
+      error: message.slice(0, 1000),
+      processed_at: now,
+      last_error_at: now,
+    })
+    .eq("id", id);
+  assertNoError(error, "Failed to mark send job recipient as failed");
+}
+
+export async function incrementSendJobProgress(
+  jobId: string,
+  sentDelta: number,
+  failedDelta: number
+): Promise<void> {
+  const normalizedSentDelta = Math.max(0, Math.floor(sentDelta));
+  const normalizedFailedDelta = Math.max(0, Math.floor(failedDelta));
+  if (normalizedSentDelta === 0 && normalizedFailedDelta === 0) {
+    return;
+  }
+
+  const db = getDb();
+  const now = new Date().toISOString();
+
+  const { data: current, error: readError } = await db
+    .from("send_jobs")
+    .select("sent, failed")
+    .eq("id", jobId)
+    .limit(1);
+  assertNoError(readError, "Failed to read send job progress");
+
+  const currentSent = normalizeNonNegativeInteger(current?.[0]?.sent, 0);
+  const currentFailed = normalizeNonNegativeInteger(current?.[0]?.failed, 0);
+
+  const { error } = await db
+    .from("send_jobs")
+    .update({
+      sent: currentSent + normalizedSentDelta,
+      failed: currentFailed + normalizedFailedDelta,
+      updated_at: now,
+      heartbeat_at: now,
+    })
+    .eq("id", jobId);
+  assertNoError(error, "Failed to update send job progress");
+}
+
+export async function setSendJobCompleted(
+  jobId: string,
+  status: SendJobStatus
+): Promise<void> {
+  const now = new Date().toISOString();
+  const db = getDb();
+  const { error } = await db
+    .from("send_jobs")
+    .update({
+      status,
+      completed_at: status === "completed" || status === "failed" || status === "cancelled" ? now : null,
+      updated_at: now,
+      heartbeat_at: now,
+    })
+    .eq("id", jobId);
+  assertNoError(error, "Failed to finalize send job");
+}
+
+export async function failSendJobWithMessage(
+  jobId: string,
+  message: string
+): Promise<void> {
+  const now = new Date().toISOString();
+  const db = getDb();
+  const { error } = await db
+    .from("send_jobs")
+    .update({
+      status: "failed",
+      error_message: message.slice(0, 2000),
+      completed_at: now,
+      updated_at: now,
+      heartbeat_at: now,
+    })
+    .eq("id", jobId);
+  assertNoError(error, "Failed to fail send job");
+}
+
+export async function countSendJobRecipientsByStatus(
+  jobId: string,
+  status: SendJobRecipientStatus
+): Promise<number> {
+  const db = getDb();
+  const { count, error } = await db
+    .from("send_job_recipients")
+    .select("id", { count: "exact", head: true })
+    .eq("job_id", jobId)
+    .eq("status", status);
+  assertNoError(error, "Failed to count send job recipients");
+  return count ?? 0;
 }
