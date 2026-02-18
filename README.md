@@ -32,6 +32,7 @@ UNSUBSCRIBE_SECRET=replace-with-random-secret
 OPENAI_API_KEY=your-openai-api-key
 OPENAI_MODEL=gpt-4.1-mini
 INITIAL_OWNER_EMAIL=guillaume.gay@protonmail.com
+CONTACT_SOURCE_API_TOKEN=optional-default-api-token
 ```
 
 | Variable | Required | Default | Description |
@@ -48,6 +49,7 @@ INITIAL_OWNER_EMAIL=guillaume.gay@protonmail.com
 | `OPENAI_MODEL` | No | `gpt-4.1-mini` | Model used for vibe generation |
 | `INITIAL_OWNER_EMAIL` | No | `guillaume.gay@protonmail.com` | Bootstrap owner account that is allowed and auto-linked to existing workspaces |
 | `ALLOWED_AUTH_EMAILS` | No | `INITIAL_OWNER_EMAIL` | Comma-separated allowlist for login access |
+| `CONTACT_SOURCE_API_TOKEN` | No | — | Optional fallback token for workspace contact API integrations |
 
 ### Database
 
@@ -81,6 +83,24 @@ npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
+
+## Contact Integrations (API sync)
+
+You can keep manual CSV uploads, or configure a workspace-level API integration:
+
+1. Run the latest `supabase/schema.sql` so `workspace_settings` includes contact source fields.
+2. Open the **Integrations** tab for a workspace.
+3. Set **Contact source** to `Custom API (HTTP JSON)`.
+4. Configure:
+   - Endpoint URL
+   - `emailField` mapping (required)
+   - `listPath` (required unless the root API response is already an array)
+   - `fieldMappings` list for all imported fields (`header=path`, one per line)
+   - Optional API token + header/prefix
+   - Add `verified=...` in `fieldMappings` to use verified/unverified segmentation
+5. Use the **API Playground** (right panel in Integrations) to run test calls and inspect response status/headers/body.
+6. Go to **Contacts** and click **Sync from API**.
+7. In **Compose**, use the manual recipient list (`To`, one email per line). You can click **Use all contacts** to fill it quickly.
 
 ## Production
 

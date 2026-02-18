@@ -9,6 +9,7 @@ interface SendBody {
   workspaceId: string;
   from: string;
   to: string[];
+  recipientMode?: "manual" | "all_contacts" | "verified_contacts" | "unverified_contacts";
   subject: string;
   html: string;
   dryRun: boolean;
@@ -16,6 +17,44 @@ interface SendBody {
   rateLimit: number;
   footerHtml: string;
   websiteUrl: string;
+}
+
+type RecipientMode =
+  | "manual"
+  | "all_contacts"
+  | "verified_contacts"
+  | "unverified_contacts";
+
+function normalizeRecipientMode(value: unknown): RecipientMode {
+  if (value === "all_contacts") return "all_contacts";
+  if (value === "verified_contacts") return "verified_contacts";
+  if (value === "unverified_contacts") return "unverified_contacts";
+  return "manual";
+}
+
+function uniqueEmails(values: string[]): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+
+  for (const value of values) {
+    const email = value.trim();
+    if (!email) continue;
+    const key = email.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(email);
+  }
+
+  return unique;
+}
+
+function parseBooleanLike(value: string | undefined): boolean | null {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return null;
+  if (["true", "1", "yes", "y", "verified"].includes(normalized)) return true;
+  if (["false", "0", "no", "n", "unverified"].includes(normalized)) return false;
+  return null;
 }
 
 export async function POST(req: NextRequest) {
@@ -26,6 +65,7 @@ export async function POST(req: NextRequest) {
       workspaceId,
       from,
       to,
+      recipientMode: rawRecipientMode,
       subject,
       html,
       dryRun,
@@ -35,7 +75,7 @@ export async function POST(req: NextRequest) {
       websiteUrl,
     } = body;
 
-    if (!workspaceId || !from || !to?.length || !subject || !html) {
+    if (!workspaceId || !from || !subject || !html) {
       return NextResponse.json(
         { error: "Missing required fields" },
         { status: 400 }
@@ -55,26 +95,60 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (dryRun) {
-      return NextResponse.json({ sent: to.length, dryRun: true });
-    }
-
     const baseUrl =
       process.env.APP_BASE_URL?.trim() ||
       process.env.NEXT_PUBLIC_APP_URL?.trim() ||
       req.nextUrl.origin;
 
+    const recipientMode = normalizeRecipientMode(rawRecipientMode);
     const delay = Math.max(0, rateLimit ?? 300);
     let sent = 0;
     const errorEmails: string[] = [];
 
-    // Build contact lookup for template variables
     const contactList = await getContacts(workspaceId);
     const contactMap = new Map(
       contactList.map((c) => [c.email.toLowerCase(), c])
     );
 
-    for (const recipient of to) {
+    const recipients = (() => {
+      if (recipientMode === "all_contacts") {
+        return uniqueEmails(contactList.map((contact) => contact.email));
+      }
+      if (recipientMode === "verified_contacts") {
+        return uniqueEmails(
+          contactList
+            .filter(
+              (contact) => parseBooleanLike(contact.fields.verified) === true
+            )
+            .map((contact) => contact.email)
+        );
+      }
+      if (recipientMode === "unverified_contacts") {
+        return uniqueEmails(
+          contactList
+            .filter(
+              (contact) => parseBooleanLike(contact.fields.verified) === false
+            )
+            .map((contact) => contact.email)
+        );
+      }
+      return uniqueEmails(Array.isArray(to) ? to : []);
+    })();
+
+    if (recipients.length === 0) {
+      return NextResponse.json(
+        { error: "No recipients resolved for this send" },
+        { status: 400 }
+      );
+    }
+
+    if (dryRun) {
+      return NextResponse.json({ sent: recipients.length, dryRun: true });
+    }
+
+    for (let index = 0; index < recipients.length; index++) {
+      const recipient = recipients[index];
+
       // Replace template variables per recipient
       const contact = contactMap.get(recipient.toLowerCase());
       const vars: Record<string, string> = {
@@ -122,7 +196,7 @@ export async function POST(req: NextRequest) {
         console.error(`Failed to send to ${recipient}:`, err);
         errorEmails.push(recipient);
       }
-      if (to.indexOf(recipient) < to.length - 1) {
+      if (index < recipients.length - 1) {
         await new Promise((r) => setTimeout(r, delay));
       }
     }

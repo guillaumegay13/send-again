@@ -21,6 +21,8 @@ interface Workspace {
   rateLimit: number;
   footerHtml: string;
   websiteUrl: string;
+  contactSourceProvider: "manual" | "http_json";
+  contactSourceConfig: Record<string, string>;
   verified: boolean;
 }
 
@@ -41,6 +43,22 @@ interface HistoryItem {
   subject: string;
   sentAt: string;
   events: EmailEvent[];
+}
+
+function uniqueEmails(values: string[]): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+
+  for (const raw of values) {
+    const email = raw.trim();
+    if (!email) continue;
+    const key = email.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(email);
+  }
+
+  return unique;
 }
 
 function formatTimestamp(value: string): string {
@@ -68,6 +86,55 @@ function normalizeEventType(eventType: string): string {
   }
 }
 
+function parseDelimitedRow(row: string, separator: string): string[] {
+  const values: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  let openedQuotedField = false;
+
+  for (let i = 0; i < row.length; i++) {
+    const char = row[i];
+
+    if (char === "\"") {
+      if (inQuotes) {
+        if (row[i + 1] === "\"") {
+          current += "\"";
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else if (current.trim().length === 0) {
+        inQuotes = true;
+        openedQuotedField = true;
+        current = "";
+      } else {
+        current += char;
+      }
+      continue;
+    }
+
+    if (char === separator && !inQuotes) {
+      values.push(current.trim());
+      current = "";
+      openedQuotedField = false;
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (inQuotes && openedQuotedField) {
+    current = `"${current}`;
+  }
+  values.push(current.trim());
+
+  return values;
+}
+
+function normalizeCSVValue(value: string): string {
+  return value.trim().replace(/"/g, "").replace(/^'+/, "");
+}
+
 function parseCSV(text: string): Contact[] {
   // Strip BOM and handle all line ending styles (\r\n, \n, \r)
   const lines = text.replace(/^\uFEFF/, "").split(/\r\n|\n|\r/).filter((l) => l.trim());
@@ -79,7 +146,9 @@ function parseCSV(text: string): Contact[] {
       ? ";"
       : ",";
 
-  const headers = lines[0].split(sep).map((h) => h.trim().toLowerCase());
+  const headers = parseDelimitedRow(lines[0], sep).map((h) =>
+    normalizeCSVValue(h).toLowerCase()
+  );
 
   // Find the email column
   const emailIdx = headers.findIndex(
@@ -94,7 +163,7 @@ function parseCSV(text: string): Contact[] {
 
   const byEmail = new Map<string, Contact>();
   for (let i = 1; i < lines.length; i++) {
-    const values = lines[i].split(sep).map((v) => v.trim());
+    const values = parseDelimitedRow(lines[i], sep).map(normalizeCSVValue);
     const email = values[eIdx] ?? "";
     if (!email) continue;
     const fields: Record<string, string> = {};
@@ -265,12 +334,20 @@ export default function ComposePage() {
     setAuthError(null);
     fetchJson<Workspace[]>("/api/workspaces")
       .then((data) => {
-        setWorkspaces(data);
+        const normalized = data.map((workspace) => ({
+          ...workspace,
+          contactSourceProvider: workspace.contactSourceProvider ?? "manual",
+          contactSourceConfig: workspace.contactSourceConfig ?? {},
+        }));
+        setWorkspaces(normalized);
         setActiveId((current) => {
-          if (current && data.some((workspace) => workspace.id === current)) {
+          if (
+            current &&
+            normalized.some((workspace) => workspace.id === current)
+          ) {
             return current;
           }
-          return data[0]?.id ?? null;
+          return normalized[0]?.id ?? null;
         });
       })
       .catch((error: unknown) => {
@@ -397,14 +474,22 @@ export default function ComposePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id }),
       });
+      const normalized = {
+        ...created,
+        contactSourceProvider: created.contactSourceProvider ?? "manual",
+        contactSourceConfig: created.contactSourceConfig ?? {},
+      };
       setWorkspaces((prev) => {
-        const next = [...prev.filter((workspace) => workspace.id !== created.id), created];
+        const next = [
+          ...prev.filter((workspace) => workspace.id !== normalized.id),
+          normalized,
+        ];
         next.sort((a, b) => a.id.localeCompare(b.id));
         return next;
       });
-      setActiveId(created.id);
+      setActiveId(normalized.id);
       setNewWorkspaceId("");
-      setWorkspaceMessage(`Domain added: ${created.id}`);
+      setWorkspaceMessage(`Domain added: ${normalized.id}`);
       setTab("settings");
     } catch (error) {
       setWorkspaceMessage(error instanceof Error ? error.message : String(error));
@@ -495,6 +580,8 @@ export default function ComposePage() {
           rateLimit: updated.rateLimit,
           footerHtml: updated.footerHtml,
           websiteUrl: updated.websiteUrl,
+          contactSourceProvider: updated.contactSourceProvider,
+          contactSourceConfig: updated.contactSourceConfig,
         }),
       }).catch(console.error);
     }, 500);
@@ -653,9 +740,18 @@ export default function ComposePage() {
     }, 300);
   }, [workspace?.id, workspace?.websiteUrl, workspace?.footerHtml]);
 
+  const manualRecipients = uniqueEmails(
+    to
+      .split("\n")
+      .map((e) => e.trim())
+      .filter(Boolean)
+  );
+  const recipients = manualRecipients;
+
   // Build sample variables from first recipient's contact data
-  const firstRecipient = to.split("\n").map((e) => e.trim()).find(Boolean) ?? "";
-  const sampleContact = contacts.find((c) => c.email === firstRecipient) ?? contacts[0];
+  const firstRecipient = recipients[0] ?? "";
+  const sampleContact =
+    contacts.find((c) => c.email === firstRecipient) ?? contacts[0];
   const sampleVars: Record<string, string> = {
     email: sampleContact?.email ?? firstRecipient,
     ...(sampleContact?.fields ?? {}),
@@ -696,21 +792,13 @@ export default function ComposePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [html, updatePreview, sampleContact?.email, sampleFieldsJson]);
 
-  const recipients = to
-    .split("\n")
-    .map((e) => e.trim())
-    .filter(Boolean);
-
   async function handleSend() {
-    if (
-      !sessionToken ||
-      !workspace?.from ||
-      !workspace.id ||
-      !recipients.length ||
-      !subject ||
-      !html
-    ) {
+    if (!sessionToken || !workspace?.from || !workspace.id || !subject || !html) {
       setResult("Fill in all fields.");
+      return;
+    }
+    if (!recipients.length) {
+      setResult("Add at least one recipient.");
       return;
     }
     setSending(true);

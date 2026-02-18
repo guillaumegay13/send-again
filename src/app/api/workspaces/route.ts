@@ -58,6 +58,8 @@ export async function GET(req: NextRequest) {
         rateLimit: saved?.rate_limit ?? 300,
         footerHtml: saved?.footer_html ?? "",
         websiteUrl: saved?.website_url || `https://${workspaceId}`,
+        contactSourceProvider: saved?.contact_source_provider ?? "manual",
+        contactSourceConfig: saved?.contact_source_config ?? {},
         verified: verifiedSet.has(workspaceId.toLowerCase()),
       };
     });
@@ -94,6 +96,8 @@ export async function POST(req: NextRequest) {
       rateLimit: saved?.rate_limit ?? 300,
       footerHtml: saved?.footer_html ?? "",
       websiteUrl: saved?.website_url || `https://${workspaceId}`,
+      contactSourceProvider: saved?.contact_source_provider ?? "manual",
+      contactSourceConfig: saved?.contact_source_config ?? {},
       verified: verifiedSet.has(workspaceId),
     });
   } catch (err) {

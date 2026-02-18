@@ -39,17 +39,14 @@ function assertNoError(
   }
 }
 
-function isMissingWorkspaceOptionalColumnError(
+function getMissingWorkspaceSettingsColumn(
   error: { message: string } | null
-): boolean {
-  if (!error) return false;
-  const message = error.message.toLowerCase();
-  if (!message.includes("workspace_settings")) return false;
-  return (
-    message.includes("footer_html") ||
-    message.includes("website_url") ||
-    (message.includes("column") && message.includes("does not exist"))
+): string | null {
+  if (!error) return null;
+  const match = error.message.match(
+    /column ["']?([a-z_]+)["']? of relation ["']workspace_settings["'] does not exist/i
   );
+  return match?.[1] ?? null;
 }
 
 function normalizeFields(value: unknown): Record<string, string> {
@@ -62,6 +59,15 @@ function normalizeFields(value: unknown): Record<string, string> {
     normalized[key] = raw == null ? "" : String(raw);
   }
   return normalized;
+}
+
+export type ContactSourceProvider = "manual" | "http_json";
+
+function normalizeContactSourceProvider(value: unknown): ContactSourceProvider {
+  if (value === "http_json") return "http_json";
+  // Backward compatibility for early integration value.
+  if (value === "airconcierge") return "http_json";
+  return "manual";
 }
 
 // --- Workspace Memberships ---
@@ -239,6 +245,8 @@ export interface DbWorkspaceSettings {
   rate_limit: number;
   footer_html: string;
   website_url: string;
+  contact_source_provider: ContactSourceProvider;
+  contact_source_config: Record<string, string>;
 }
 
 interface WorkspaceSettingsRow {
@@ -248,6 +256,8 @@ interface WorkspaceSettingsRow {
   rate_limit: unknown;
   footer_html?: unknown;
   website_url?: unknown;
+  contact_source_provider?: unknown;
+  contact_source_config?: unknown;
 }
 
 function normalizeWorkspaceSettingsRow(
@@ -263,6 +273,10 @@ function normalizeWorkspaceSettingsRow(
         : Number(row.rate_limit ?? 300),
     footer_html: String(row.footer_html ?? ""),
     website_url: String(row.website_url ?? ""),
+    contact_source_provider: normalizeContactSourceProvider(
+      row.contact_source_provider
+    ),
+    contact_source_config: normalizeFields(row.contact_source_config),
   };
 }
 
@@ -299,36 +313,43 @@ export async function upsertWorkspaceSettings(settings: {
   rateLimit: number;
   footerHtml: string;
   websiteUrl: string;
+  contactSourceProvider: ContactSourceProvider;
+  contactSourceConfig: Record<string, string>;
 }): Promise<void> {
   const db = getDb();
-  const fullPayload = {
+  const optionalColumns = new Set([
+    "footer_html",
+    "website_url",
+    "contact_source_provider",
+    "contact_source_config",
+  ]);
+  const payload: Record<string, unknown> = {
     id: settings.id,
     from_address: settings.from,
     config_set: settings.configSet,
     rate_limit: settings.rateLimit,
     footer_html: settings.footerHtml,
     website_url: settings.websiteUrl,
+    contact_source_provider: settings.contactSourceProvider,
+    contact_source_config: settings.contactSourceConfig,
   };
 
-  const { error } = await db
-    .from("workspace_settings")
-    .upsert(fullPayload, { onConflict: "id" });
-
-  if (isMissingWorkspaceOptionalColumnError(error)) {
-    const legacyPayload = {
-      id: settings.id,
-      from_address: settings.from,
-      config_set: settings.configSet,
-      rate_limit: settings.rateLimit,
-    };
-    const { error: legacyError } = await db
+  while (true) {
+    const { error } = await db
       .from("workspace_settings")
-      .upsert(legacyPayload, { onConflict: "id" });
-    assertNoError(legacyError, "Failed to upsert workspace settings");
+      .upsert(payload, { onConflict: "id" });
+
+    if (!error) return;
+
+    const missingColumn = getMissingWorkspaceSettingsColumn(error);
+    if (missingColumn && optionalColumns.has(missingColumn)) {
+      delete payload[missingColumn];
+      continue;
+    }
+
+    assertNoError(error, "Failed to upsert workspace settings");
     return;
   }
-
-  assertNoError(error, "Failed to upsert workspace settings");
 }
 
 // --- Sends & Events ---
