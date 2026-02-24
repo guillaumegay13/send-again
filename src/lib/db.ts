@@ -63,6 +63,18 @@ function getMissingRelation(error: { message: string } | null): string | null {
   return schemaCacheMatch?.[1] ?? null;
 }
 
+function isMissingTableError(
+  error: { message: string } | null,
+  table: string
+): boolean {
+  if (!error) return false;
+  const message = error.message.toLowerCase();
+  if (!message.includes(table.toLowerCase())) return false;
+  return (
+    message.includes("schema cache") || message.includes("does not exist")
+  );
+}
+
 function normalizeFields(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
@@ -358,7 +370,10 @@ export async function getUnsubscribedEmailSet(
       .in("email", chunk);
     if (error) {
       const missingRelation = getMissingRelation(error);
-      if (missingRelation === "contact_unsubscribes") {
+      if (
+        missingRelation === "contact_unsubscribes" ||
+        isMissingTableError(error, "contact_unsubscribes")
+      ) {
         // Backward compatibility: older DBs can still send until the unsubscribe table is created.
         return new Set();
       }
