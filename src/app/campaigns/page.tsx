@@ -219,7 +219,7 @@ function makeDefaultAudience(): SendAudience {
 
 function createSendNode(overrides: Partial<SendNode> = {}): SendNode {
   const defaultAudience = makeDefaultAudience();
-  const overrideAudience = overrides.audience ?? {};
+  const overrideAudience: Partial<SendAudience> = overrides.audience ?? {};
   return {
     kind: "send",
     id: uid("send"),
