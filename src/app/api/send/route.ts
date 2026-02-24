@@ -3,9 +3,11 @@ import {
   createSendJob,
   failSendJobWithMessage,
   getContacts,
+  getUnsubscribedEmailSet,
   userCanAccessWorkspace,
   insertSendJobRecipients,
 } from "@/lib/db";
+import { processSendJobs } from "@/lib/send-job-processor";
 import { apiErrorResponse, requireAuthenticatedUser } from "@/lib/auth";
 
 interface SendBody {
@@ -169,9 +171,22 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    const unsubscribed = await getUnsubscribedEmailSet(
+      body.workspaceId,
+      recipients
+    );
+    if (unsubscribed.size > 0) {
+      recipients = recipients.filter((email) => !unsubscribed.has(email));
+    }
+
     if (recipients.length === 0) {
       return NextResponse.json(
-        { error: "No recipients resolved for this send" },
+        {
+          error:
+            unsubscribed.size > 0
+              ? "All resolved recipients are unsubscribed"
+              : "No recipients resolved for this send",
+        },
         { status: 400 }
       );
     }
@@ -196,6 +211,7 @@ export async function POST(req: NextRequest) {
     if (body.dryRun) {
       return NextResponse.json({
         sent: recipients.length,
+        skippedUnsubscribed: unsubscribed.size,
         dryRun: true,
       });
     }
@@ -226,10 +242,22 @@ export async function POST(req: NextRequest) {
       throw error;
     }
 
+    // Fire-and-forget: loop processing until the job is fully done
+    (async () => {
+      let hasWork = true;
+      while (hasWork) {
+        const summary = await processSendJobs();
+        hasWork = summary.recipientsProcessed > 0;
+      }
+    })().catch((err) => {
+      console.error("Background processSendJobs error:", err);
+    });
+
     return NextResponse.json({
       jobId,
       status: "queued",
       total: recipients.length,
+      skippedUnsubscribed: unsubscribed.size,
       dryRun: false,
     });
   } catch (error) {

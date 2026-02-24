@@ -11,8 +11,9 @@ import {
 } from "react";
 import { getBrowserSupabaseClient } from "@/lib/supabase-browser";
 import { appendWorkspaceFooter } from "@/lib/email-footer";
+import { CampaignsShell } from "./campaigns/page";
 
-type Tab = "compose" | "contacts" | "history" | "settings";
+type Tab = "compose" | "contacts" | "history" | "settings" | "campaigns";
 
 interface Workspace {
   id: string;
@@ -1240,6 +1241,7 @@ export default function ComposePage() {
         jobId?: string;
         status?: "queued" | "running";
         total?: number;
+        skippedUnsubscribed?: number;
       }>("/api/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1257,7 +1259,13 @@ export default function ComposePage() {
         }),
       });
       if (data.dryRun) {
-        setResult(`Dry run: ${data.sent} email(s) would be sent.`);
+        const skipped =
+          typeof data.skippedUnsubscribed === "number"
+            ? data.skippedUnsubscribed
+            : 0;
+        setResult(
+          `Dry run: ${data.sent} email(s) would be sent.${skipped > 0 ? ` ${skipped} unsubscribed skipped.` : ""}`
+        );
         setSending(false);
       } else {
         if (!data.jobId) {
@@ -1266,7 +1274,13 @@ export default function ComposePage() {
           return;
         }
         setActiveSendJobId(data.jobId);
-        setResult(`Queued ${data.total ?? recipients.length} recipients`);
+        const skipped =
+          typeof data.skippedUnsubscribed === "number"
+            ? data.skippedUnsubscribed
+            : 0;
+        setResult(
+          `Queued ${data.total ?? recipients.length} recipients${skipped > 0 ? ` (${skipped} unsubscribed skipped)` : ""}`
+        );
         pollSendJob();
       }
     } catch (err) {
@@ -1497,7 +1511,7 @@ export default function ComposePage() {
         </div>
 
         <nav className="flex flex-col gap-1 px-2">
-          {(["compose", "contacts", "history", "settings"] as Tab[]).map((t) => (
+          {(["compose", "contacts", "history", "settings", "campaigns"] as Tab[]).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -2346,6 +2360,12 @@ export default function ComposePage() {
                 />
               </div>
             </div>
+          </div>
+        )}
+
+        {tab === "campaigns" && (
+          <div className="flex-1 min-w-0 overflow-y-auto bg-slate-100 text-slate-900">
+            <CampaignsShell embedded />
           </div>
         )}
       </div>

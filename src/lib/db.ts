@@ -61,6 +61,24 @@ function normalizeFields(value: unknown): Record<string, string> {
   return normalized;
 }
 
+function normalizeEmail(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function uniqueNormalizedEmails(values: string[]): string[] {
+  return Array.from(
+    new Set(values.map((email) => normalizeEmail(email)).filter(Boolean))
+  );
+}
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+  const groups: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    groups.push(items.slice(i, i + size));
+  }
+  return groups;
+}
+
 export type ContactSourceProvider = "manual" | "http_json";
 
 function normalizeContactSourceProvider(value: unknown): ContactSourceProvider {
@@ -140,6 +158,10 @@ interface ContactRow {
   fields: unknown;
 }
 
+interface ContactUnsubscribeRow {
+  email: string;
+}
+
 export async function getContacts(workspaceId: string): Promise<DbContact[]> {
   const db = getDb();
   const pageSize = 1000;
@@ -176,10 +198,17 @@ export async function getContacts(workspaceId: string): Promise<DbContact[]> {
     from += page.length;
   }
 
-  return allRows.map((row) => ({
-    email: row.email,
-    fields: normalizeFields(row.fields),
-  }));
+  const contactsByEmail = new Map<string, DbContact>();
+  for (const row of allRows) {
+    const email = normalizeEmail(row.email);
+    if (!email) continue;
+    contactsByEmail.set(email, {
+      email,
+      fields: normalizeFields(row.fields),
+    });
+  }
+
+  return Array.from(contactsByEmail.values());
 }
 
 export async function upsertContacts(
@@ -189,11 +218,19 @@ export async function upsertContacts(
   if (contacts.length === 0) return;
 
   const db = getDb();
-  const rows = contacts.map((contact) => ({
+  const byEmail = new Map<string, Record<string, string>>();
+  for (const contact of contacts) {
+    const email = normalizeEmail(contact.email);
+    if (!email) continue;
+    byEmail.set(email, normalizeFields(contact.fields));
+  }
+  const rows = Array.from(byEmail.entries()).map(([email, fields]) => ({
     workspace_id: workspaceId,
-    email: contact.email,
-    fields: contact.fields,
+    email,
+    fields,
   }));
+  if (rows.length === 0) return;
+
   const { error } = await db
     .from("contacts")
     .upsert(rows, { onConflict: "workspace_id,email" });
@@ -205,12 +242,15 @@ export async function updateContact(
   email: string,
   fields: Record<string, string>
 ): Promise<void> {
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail) return;
+
   const db = getDb();
   const { error } = await db
     .from("contacts")
-    .update({ fields })
+    .update({ fields: normalizeFields(fields) })
     .eq("workspace_id", workspaceId)
-    .eq("email", email);
+    .eq("email", normalizedEmail);
   assertNoError(error, "Failed to update contact");
 }
 
@@ -218,12 +258,15 @@ export async function deleteContact(
   workspaceId: string,
   email: string
 ): Promise<void> {
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail) return;
+
   const db = getDb();
   const { error } = await db
     .from("contacts")
     .delete()
     .eq("workspace_id", workspaceId)
-    .eq("email", email);
+    .eq("email", normalizedEmail);
   assertNoError(error, "Failed to delete contact");
 }
 
@@ -240,13 +283,7 @@ export async function getContactsByEmails(
   workspaceId: string,
   emails: string[]
 ): Promise<DbContact[]> {
-  const sanitized = Array.from(
-    new Set(
-      emails.map((email) => email.trim().toLowerCase()).filter(Boolean)
-    )
-  );
-
-  const normalized = sanitized.slice(0, 2000);
+  const normalized = uniqueNormalizedEmails(emails).slice(0, 2000);
 
   if (normalized.length === 0) {
     return [];
@@ -262,9 +299,97 @@ export async function getContactsByEmails(
 
   const rows = (data ?? []) as ContactRow[];
   return rows.map((row) => ({
-    email: row.email.toLowerCase(),
+    email: normalizeEmail(row.email),
     fields: normalizeFields(row.fields),
   }));
+}
+
+export async function markContactUnsubscribed(
+  workspaceId: string,
+  email: string
+): Promise<void> {
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail) return;
+
+  const db = getDb();
+  const { error } = await db.from("contact_unsubscribes").upsert(
+    {
+      workspace_id: workspaceId,
+      email: normalizedEmail,
+      unsubscribed_at: new Date().toISOString(),
+    },
+    { onConflict: "workspace_id,email" }
+  );
+  assertNoError(error, "Failed to persist unsubscribe");
+}
+
+export async function getUnsubscribedEmailSet(
+  workspaceId: string,
+  emails: string[]
+): Promise<Set<string>> {
+  const normalized = uniqueNormalizedEmails(emails);
+  if (normalized.length === 0) {
+    return new Set();
+  }
+
+  const db = getDb();
+  const unsubscribed = new Set<string>();
+  const chunks = chunkArray(normalized, 500);
+
+  for (const chunk of chunks) {
+    const { data, error } = await db
+      .from("contact_unsubscribes")
+      .select("email")
+      .eq("workspace_id", workspaceId)
+      .in("email", chunk);
+    assertNoError(error, "Failed to fetch unsubscribed contacts");
+
+    const rows = (data ?? []) as ContactUnsubscribeRow[];
+    for (const row of rows) {
+      unsubscribed.add(normalizeEmail(row.email));
+    }
+  }
+
+  return unsubscribed;
+}
+
+export async function filterContactsAgainstUnsubscribes(
+  workspaceId: string,
+  contacts: DbContact[]
+): Promise<{ contacts: DbContact[]; skipped: number }> {
+  if (contacts.length === 0) {
+    return { contacts: [], skipped: 0 };
+  }
+
+  const normalizedContacts: DbContact[] = [];
+  for (const contact of contacts) {
+    const email = normalizeEmail(contact.email);
+    if (!email) continue;
+    normalizedContacts.push({
+      email,
+      fields: normalizeFields(contact.fields),
+    });
+  }
+
+  if (normalizedContacts.length === 0) {
+    return { contacts: [], skipped: contacts.length };
+  }
+
+  const unsubscribed = await getUnsubscribedEmailSet(
+    workspaceId,
+    normalizedContacts.map((contact) => contact.email)
+  );
+  if (unsubscribed.size === 0) {
+    return { contacts: normalizedContacts, skipped: 0 };
+  }
+
+  const allowed = normalizedContacts.filter(
+    (contact) => !unsubscribed.has(contact.email)
+  );
+  return {
+    contacts: allowed,
+    skipped: normalizedContacts.length - allowed.length,
+  };
 }
 
 // --- Workspace Settings ---

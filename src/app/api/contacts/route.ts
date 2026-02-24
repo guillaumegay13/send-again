@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  filterContactsAgainstUnsubscribes,
   getContacts,
   upsertContacts,
   deleteAllContacts,
@@ -43,7 +44,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Workspace not found" }, { status: 403 });
     }
 
-    await upsertContacts(workspace, contacts);
+    const filtered = await filterContactsAgainstUnsubscribes(workspace, contacts);
+    await upsertContacts(workspace, filtered.contacts);
     return NextResponse.json(await getContacts(workspace));
   } catch (error) {
     return apiErrorResponse(error);

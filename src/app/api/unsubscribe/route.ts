@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { deleteContact, getWorkspaceSettings } from "@/lib/db";
+import {
+  deleteContact,
+  getWorkspaceSettings,
+  markContactUnsubscribed,
+} from "@/lib/db";
 import { verifyUnsubscribeToken } from "@/lib/unsubscribe";
 
 function escapeHtml(value: string): string {
@@ -114,6 +118,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    await markContactUnsubscribed(workspace, email);
     await deleteContact(workspace, email);
     const settings = await getWorkspaceSettings(workspace);
     const redirectUrl = buildWorkspaceUnsubscribeUrl(

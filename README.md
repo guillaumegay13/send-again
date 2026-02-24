@@ -32,7 +32,6 @@ UNSUBSCRIBE_SECRET=replace-with-random-secret
 OPENAI_API_KEY=your-openai-api-key
 OPENAI_MODEL=gpt-4.1-mini
 INITIAL_OWNER_EMAIL=guillaume.gay@protonmail.com
-CONTACT_SOURCE_API_TOKEN=optional-default-api-token
 SEND_JOB_PROCESSOR_TOKEN=optional-worker-token
 SEND_JOB_BATCH_SIZE=50
 SEND_JOB_CONCURRENCY=4
@@ -53,7 +52,6 @@ SEND_JOB_MAX_RECIPIENTS_PER_JOB=250
 | `OPENAI_MODEL` | No | `gpt-4.1-mini` | Model used for vibe generation |
 | `INITIAL_OWNER_EMAIL` | No | `guillaume.gay@protonmail.com` | Bootstrap owner account that is allowed and auto-linked to existing workspaces |
 | `ALLOWED_AUTH_EMAILS` | No | `INITIAL_OWNER_EMAIL` | Comma-separated allowlist for login access |
-| `CONTACT_SOURCE_API_TOKEN` | No | — | Optional fallback token for workspace contact API integrations |
 | `SEND_JOB_BATCH_SIZE` | No | `50` | Number of recipients to fetch from queue per batch |
 | `SEND_JOB_CONCURRENCY` | No | `4` | Parallel sends per batch in the worker |
 | `SEND_JOB_MAX_RECIPIENTS_PER_JOB` | No | `250` | Max recipients processed per processor invocation |
@@ -107,23 +105,12 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
-## Contact Integrations (API sync)
+## Unsubscribe Suppression
 
-You can keep manual CSV uploads, or configure a workspace-level API integration:
-
-1. Run the latest `supabase/schema.sql` so `workspace_settings` includes contact source fields.
-2. Open the **Integrations** tab for a workspace.
-3. Set **Contact source** to `Custom API (HTTP JSON)`.
-4. Configure:
-   - Endpoint URL
-   - `emailField` mapping (required)
-   - `listPath` (required unless the root API response is already an array)
-   - `fieldMappings` list for all imported fields (`header=path`, one per line)
-   - Optional API token + header/prefix
-   - Add `verified=...` in `fieldMappings` to use verified/unverified segmentation
-5. Use the **API Playground** (right panel in Integrations) to run test calls and inspect response status/headers/body.
-6. Go to **Contacts** and click **Sync from API**.
-7. In **Compose**, use the manual recipient list (`To`, one email per line). You can click **Use all contacts** to fill it quickly.
+- Run the latest `supabase/schema.sql` to create `contact_unsubscribes`.
+- Unsubscribe links are persisted in `contact_unsubscribes` (workspace + email).
+- Re-imports (CSV/manual/`POST /api/contacts`) automatically skip suppressed emails.
+- Sends also enforce suppression, including already queued jobs.
 
 ## Production
 

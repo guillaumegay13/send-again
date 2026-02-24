@@ -18,6 +18,7 @@ import {
   setSendJobCompleted,
   getPendingSendJobRecipients,
   failSendJobWithMessage,
+  getUnsubscribedEmailSet,
 } from "@/lib/db";
 
 interface SendJobProcessOptions {
@@ -218,13 +219,42 @@ async function processSendJob(
       return processed;
     }
 
-    const claimedRecipients = await claimSendJobRecipients(
+    let claimedRecipients = await claimSendJobRecipients(
       jobId,
       recipients.map((recipient) => recipient.id)
     );
 
     if (claimedRecipients.length === 0) {
       return processed;
+    }
+
+    const unsubscribed = await getUnsubscribedEmailSet(
+      context.workspaceId,
+      claimedRecipients.map((recipient) => recipient.recipient)
+    );
+    if (unsubscribed.size > 0) {
+      const suppressedRecipients = claimedRecipients.filter((recipient) =>
+        unsubscribed.has(recipient.recipient.toLowerCase())
+      );
+      if (suppressedRecipients.length > 0) {
+        await Promise.all(
+          suppressedRecipients.map((recipient) =>
+            markSendJobRecipientFailed(recipient.id, "Recipient unsubscribed")
+          )
+        );
+        await incrementSendJobProgress(jobId, 0, suppressedRecipients.length);
+        processed += suppressedRecipients.length;
+      }
+      claimedRecipients = claimedRecipients.filter(
+        (recipient) => !unsubscribed.has(recipient.recipient.toLowerCase())
+      );
+    }
+
+    if (claimedRecipients.length === 0) {
+      if (context.rateLimit > 0 && processed < maxRecipientsPerJob) {
+        await wait(context.rateLimit);
+      }
+      continue;
     }
 
     const recipientEmails = claimedRecipients.map(
@@ -242,7 +272,7 @@ async function processSendJob(
       const wave = waves[waveIndex];
       const waveResult = await Promise.all(
         wave.map(async (recipient) => {
-          const contact = contactMap.get(recipient.recipient);
+          const contact = contactMap.get(recipient.recipient.toLowerCase());
           const vars = {
             email: recipient.recipient,
             ...(contact?.fields ?? {}),
