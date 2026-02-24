@@ -71,6 +71,15 @@ interface SendJobStatusResponse {
   isDone: boolean;
 }
 
+interface SendJobSummary {
+  id: string;
+  workspaceId: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  total: number;
+  sent: number;
+  failed: number;
+}
+
 type FieldOperator = "equals" | "notEquals" | "contains" | "notContains";
 type ConditionMatchMode = "all" | "any";
 type HistoryEventType = "send" | "delivery" | "open" | "click" | "bounce" | "complaint";
@@ -705,6 +714,36 @@ export default function ComposePage() {
       .catch(console.error)
       .finally(() => setHistoryLoading(false));
   }, [sessionToken, activeId, fetchJson]);
+
+  useEffect(() => {
+    if (!sessionToken || !activeId) return;
+    if (activeSendJobId || sending) return;
+
+    let cancelled = false;
+    fetchJson<{ jobs: SendJobSummary[] }>(
+      `/api/send/jobs?workspace=${encodeURIComponent(
+        activeId
+      )}&status=queued,running&limit=1`
+    )
+      .then((data) => {
+        if (cancelled) return;
+        const job = data.jobs?.[0];
+        if (!job) return;
+
+        setActiveSendJobId(job.id);
+        setSending(true);
+        setResult(
+          `Resumed job ${job.status.toUpperCase()} ${job.sent + job.failed}/${job.total}`
+        );
+      })
+      .catch((error) => {
+        console.error("Failed to restore active send job:", error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionToken, activeId, activeSendJobId, fetchJson, sending]);
 
   useEffect(() => {
     stopSendPolling();
