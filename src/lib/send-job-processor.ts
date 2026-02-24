@@ -3,6 +3,7 @@ import { appendWorkspaceFooter } from "@/lib/email-footer";
 import { buildUnsubscribeUrl } from "@/lib/unsubscribe";
 import {
   claimQueuedSendJob,
+  claimRunningSendJob,
   claimStaleRunningSendJob,
   countSendJobRecipientsByStatus,
   getContactsByEmails,
@@ -132,8 +133,9 @@ export async function processSendJobs(
   for (const candidate of candidates) {
     try {
       const canClaimQueued = candidate.status === "queued";
-      const canClaimRunning =
-        candidate.status === "running" &&
+      const isRunning = candidate.status === "running";
+      const isStaleRunning =
+        isRunning &&
         isRunningJobStale(
           candidate.heartbeat_at,
           candidate.started_at,
@@ -143,11 +145,13 @@ export async function processSendJobs(
       let claimed = false;
       if (canClaimQueued) {
         claimed = await claimQueuedSendJob(candidate.id);
-      } else if (canClaimRunning) {
-        claimed = await claimStaleRunningSendJob(
-          candidate.id,
-          candidate.heartbeat_at ?? null
-        );
+      } else if (isRunning) {
+        claimed = isStaleRunning
+          ? await claimStaleRunningSendJob(
+              candidate.id,
+              candidate.heartbeat_at ?? null
+            )
+          : await claimRunningSendJob(candidate.id, candidate.heartbeat_at ?? null);
       }
 
       if (!claimed) {

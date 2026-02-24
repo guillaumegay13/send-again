@@ -1162,6 +1162,30 @@ export async function claimStaleRunningSendJob(
   return (data ?? []).length > 0;
 }
 
+export async function claimRunningSendJob(
+  jobId: string,
+  heartbeatAt: string | null
+): Promise<boolean> {
+  const now = new Date().toISOString();
+  const db = getDb();
+  let query = db
+    .from("send_jobs")
+    .update({ heartbeat_at: now, updated_at: now })
+    .eq("id", jobId)
+    .eq("status", "running")
+    .select("id");
+
+  if (heartbeatAt === null) {
+    query = query.is("heartbeat_at", null);
+  } else {
+    query = query.eq("heartbeat_at", heartbeatAt);
+  }
+
+  const { data, error } = await query;
+  assertNoError(error, "Failed to claim running send job");
+  return (data ?? []).length > 0;
+}
+
 export async function markSendJobHeartbeat(jobId: string): Promise<void> {
   const db = getDb();
   const now = new Date().toISOString();

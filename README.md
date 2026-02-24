@@ -59,6 +59,7 @@ SEND_JOB_MAX_RECIPIENTS_PER_JOB=250
 | `SEND_JOB_STALE_MS` | No | `180000` | Reclaim queued/running jobs after this heartbeat delay |
 | `SEND_JOB_STALE_RECIPIENT_MS` | No | `180000` | Retry `sending` recipients after this delay |
 | `SEND_JOB_PROCESSOR_TOKEN` | No | — | Optional shared secret required by `/api/send/process` |
+| `SEND_JOB_AFTER_MAX_ITERATIONS` | No | `20` | Max `processSendJobs()` loops scheduled via Next.js `after()` after enqueue |
 | `SEND_JOB_STATUS_INLINE_PROCESS` | No | `true` | Let `GET /api/send/status` process active jobs inline (fallback when no cron worker runs) |
 | `SEND_JOB_STATUS_INLINE_MAX_JOBS` | No | `3` | Max jobs processed per status poll when inline fallback is enabled |
 | `SEND_JOB_STATUS_INLINE_MAX_RECIPIENTS` | No | `50` | Max recipients processed per status poll when inline fallback is enabled |
@@ -87,6 +88,7 @@ Then create your user in Supabase Authentication (Email provider enabled):
 - `GET /api/send/jobs?workspace=<id>&status=queued,running` → list jobs for current user.
 - `POST /api/send/process` → worker endpoint to process queued/running jobs.
 - `GET /api/send/status` also runs an inline processing fallback for queued/running jobs by default.
+- `POST /api/send` schedules post-response processing via Next.js `after()`.
 
 Production recommendation:
 

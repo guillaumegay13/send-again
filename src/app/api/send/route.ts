@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import {
   createSendJob,
   failSendJobWithMessage,
@@ -242,15 +242,23 @@ export async function POST(req: NextRequest) {
       throw error;
     }
 
-    // Fire-and-forget: loop processing until the job is fully done
-    (async () => {
-      let hasWork = true;
-      while (hasWork) {
-        const summary = await processSendJobs();
-        hasWork = summary.recipientsProcessed > 0;
+    // Continue processing after the HTTP response lifecycle (Vercel/Next.js supported).
+    after(async () => {
+      try {
+        const maxIterations = normalizeNonNegativeInteger(
+          process.env.SEND_JOB_AFTER_MAX_ITERATIONS ?? 20,
+          20,
+          1
+        );
+        for (let i = 0; i < maxIterations; i += 1) {
+          const summary = await processSendJobs();
+          if (summary.recipientsProcessed <= 0) {
+            break;
+          }
+        }
+      } catch (err) {
+        console.error("Background processSendJobs error:", err);
       }
-    })().catch((err) => {
-      console.error("Background processSendJobs error:", err);
     });
 
     return NextResponse.json({
