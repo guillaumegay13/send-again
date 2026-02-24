@@ -261,6 +261,9 @@ export async function POST(req: NextRequest) {
       dryRun: false,
     });
   } catch (error) {
+    if (error instanceof Error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
     return apiErrorResponse(error, "Failed to start send job");
   }
 }

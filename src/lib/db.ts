@@ -49,6 +49,20 @@ function getMissingWorkspaceSettingsColumn(
   return match?.[1] ?? null;
 }
 
+function getMissingRelation(error: { message: string } | null): string | null {
+  if (!error) return null;
+
+  const relationMatch = error.message.match(
+    /relation ["']?(?:public\.)?([a-z_]+)["']? does not exist/i
+  );
+  if (relationMatch?.[1]) return relationMatch[1];
+
+  const schemaCacheMatch = error.message.match(
+    /table ['"]public\.([a-z_]+)['"] in the schema cache/i
+  );
+  return schemaCacheMatch?.[1] ?? null;
+}
+
 function normalizeFields(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
@@ -342,6 +356,13 @@ export async function getUnsubscribedEmailSet(
       .select("email")
       .eq("workspace_id", workspaceId)
       .in("email", chunk);
+    if (error) {
+      const missingRelation = getMissingRelation(error);
+      if (missingRelation === "contact_unsubscribes") {
+        // Backward compatibility: older DBs can still send until the unsubscribe table is created.
+        return new Set();
+      }
+    }
     assertNoError(error, "Failed to fetch unsubscribed contacts");
 
     const rows = (data ?? []) as ContactUnsubscribeRow[];
@@ -854,6 +875,14 @@ export async function createSendJob(params: {
     batch_size: normalizeNonNegativeInteger(params.batchSize, 50, 1),
     send_concurrency: normalizeNonNegativeInteger(params.sendConcurrency, 4, 1),
   });
+  if (error) {
+    const missingRelation = getMissingRelation(error);
+    if (missingRelation === "send_jobs") {
+      throw new Error(
+        "Database schema missing `send_jobs` table. Run the latest supabase/schema.sql."
+      );
+    }
+  }
   assertNoError(error, "Failed to create send job");
 
   return id;
@@ -887,6 +916,23 @@ export async function insertSendJobRecipients(
       .from("send_job_recipients")
       .upsert(chunk, { onConflict: "job_id,recipient" })
       .select("id");
+    if (error) {
+      const missingRelation = getMissingRelation(error);
+      if (missingRelation === "send_job_recipients") {
+        throw new Error(
+          "Database schema missing `send_job_recipients` table. Run the latest supabase/schema.sql."
+        );
+      }
+      if (
+        /no unique or exclusion constraint matching the ON CONFLICT specification/i.test(
+          error.message
+        )
+      ) {
+        throw new Error(
+          "Database schema for `send_job_recipients` is outdated (missing unique(job_id,recipient)). Run the latest supabase/schema.sql."
+        );
+      }
+    }
     assertNoError(error, "Failed to store send job recipients");
   }
 }
