@@ -108,3 +108,15 @@ create index if not exists idx_workspace_memberships_user on workspace_membershi
 create index if not exists idx_send_jobs_status_created on send_jobs(status, created_at);
 create index if not exists idx_send_jobs_user on send_jobs(user_id, status, created_at);
 create index if not exists idx_send_job_recipients_job on send_job_recipients(job_id, status, id);
+
+create table if not exists api_keys (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id text not null,
+  key_hash text not null unique,
+  key_prefix text not null,
+  name text not null default '',
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_api_keys_workspace on api_keys(workspace_id);
+create index if not exists idx_api_keys_key_hash on api_keys(key_hash);

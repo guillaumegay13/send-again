@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
+import { hashApiKey, getWorkspaceIdByKeyHash, userCanAccessWorkspace } from "@/lib/db";
 
 export class ApiAuthError extends Error {
   status: number;
@@ -106,6 +107,66 @@ export async function requireAuthenticatedUser(
   }
 
   return { id: data.user.id, email };
+}
+
+export interface WorkspaceAuthResult {
+  workspace: string;
+  authMethod: "api_key" | "jwt";
+  userId?: string;
+}
+
+export async function requireWorkspaceAuth(
+  req: NextRequest,
+  workspaceFromParam?: string | null
+): Promise<WorkspaceAuthResult> {
+  const authHeader = req.headers.get("authorization") ?? "";
+  if (!authHeader.startsWith("Bearer ")) {
+    throw new ApiAuthError("Missing bearer token", 401);
+  }
+
+  const token = authHeader.slice("Bearer ".length).trim();
+  if (!token) {
+    throw new ApiAuthError("Invalid bearer token", 401);
+  }
+
+  // API key path
+  if (token.startsWith("sk_")) {
+    const keyHash = await hashApiKey(token);
+    const workspace = await getWorkspaceIdByKeyHash(keyHash);
+    if (!workspace) {
+      throw new ApiAuthError("Invalid API key", 401);
+    }
+    return { workspace, authMethod: "api_key" };
+  }
+
+  // JWT path
+  const supabase = getSupabaseAuthClient();
+  const { data, error } = await supabase.auth.getUser(token);
+  if (error || !data.user) {
+    throw new ApiAuthError("Invalid session", 401);
+  }
+
+  const email = normalizeEmail(data.user.email);
+  if (!email) {
+    throw new ApiAuthError("Account email is required", 403);
+  }
+
+  const allowedEmails = getAllowedEmails();
+  if (!allowedEmails.includes(email)) {
+    throw new ApiAuthError("This account is not authorized", 403);
+  }
+
+  const workspace = workspaceFromParam ?? null;
+  if (!workspace) {
+    throw new ApiAuthError("workspace required", 400);
+  }
+
+  const hasAccess = await userCanAccessWorkspace(data.user.id, workspace);
+  if (!hasAccess) {
+    throw new ApiAuthError("Workspace not found", 403);
+  }
+
+  return { workspace, authMethod: "jwt", userId: data.user.id };
 }
 
 export function apiErrorResponse(

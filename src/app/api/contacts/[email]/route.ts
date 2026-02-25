@@ -1,24 +1,36 @@
 import { NextRequest, NextResponse } from "next/server";
-import { updateContact, deleteContact, userCanAccessWorkspace } from "@/lib/db";
-import { apiErrorResponse, requireAuthenticatedUser } from "@/lib/auth";
+import { getContactsByEmails, updateContact, deleteContact } from "@/lib/db";
+import { apiErrorResponse, requireWorkspaceAuth } from "@/lib/auth";
+
+export async function GET(
+  req: NextRequest,
+  { params }: { params: Promise<{ email: string }> }
+) {
+  try {
+    const { email } = await params;
+    const workspaceParam = req.nextUrl.searchParams.get("workspace");
+    const { workspace } = await requireWorkspaceAuth(req, workspaceParam);
+
+    const decoded = decodeURIComponent(email);
+    const contacts = await getContactsByEmails(workspace, [decoded]);
+    if (contacts.length === 0) {
+      return NextResponse.json({ error: "Contact not found" }, { status: 404 });
+    }
+    return NextResponse.json(contacts[0]);
+  } catch (error) {
+    return apiErrorResponse(error);
+  }
+}
 
 export async function PUT(
   req: NextRequest,
   { params }: { params: Promise<{ email: string }> }
 ) {
   try {
-    const user = await requireAuthenticatedUser(req);
     const { email } = await params;
     const body = await req.json();
-    const { workspace, fields } = body;
-    if (!workspace) {
-      return NextResponse.json({ error: "workspace required" }, { status: 400 });
-    }
-
-    const hasAccess = await userCanAccessWorkspace(user.id, workspace);
-    if (!hasAccess) {
-      return NextResponse.json({ error: "Workspace not found" }, { status: 403 });
-    }
+    const { workspace: workspaceParam, fields } = body;
+    const { workspace } = await requireWorkspaceAuth(req, workspaceParam);
 
     const decoded = decodeURIComponent(email);
     await updateContact(workspace, decoded, fields ?? {});
@@ -33,17 +45,9 @@ export async function DELETE(
   { params }: { params: Promise<{ email: string }> }
 ) {
   try {
-    const user = await requireAuthenticatedUser(req);
     const { email } = await params;
-    const workspace = req.nextUrl.searchParams.get("workspace");
-    if (!workspace) {
-      return NextResponse.json({ error: "workspace required" }, { status: 400 });
-    }
-
-    const hasAccess = await userCanAccessWorkspace(user.id, workspace);
-    if (!hasAccess) {
-      return NextResponse.json({ error: "Workspace not found" }, { status: 403 });
-    }
+    const workspaceParam = req.nextUrl.searchParams.get("workspace");
+    const { workspace } = await requireWorkspaceAuth(req, workspaceParam);
 
     const decoded = decodeURIComponent(email);
     await deleteContact(workspace, decoded);

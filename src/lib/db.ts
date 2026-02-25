@@ -114,6 +114,127 @@ function normalizeContactSourceProvider(value: unknown): ContactSourceProvider {
   return "manual";
 }
 
+// --- API Keys ---
+
+export interface DbApiKey {
+  id: string;
+  workspaceId: string;
+  name: string;
+  keyPrefix: string;
+  createdAt: string;
+}
+
+interface ApiKeyRow {
+  id: string;
+  workspace_id: string;
+  name: string;
+  key_prefix: string;
+  key_hash: string;
+  created_at: string;
+}
+
+async function hashApiKey(raw: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(raw);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function generateRawApiKey(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  const hex = Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  return `sk_${hex}`;
+}
+
+export async function createApiKey(
+  workspaceId: string,
+  name: string
+): Promise<{ key: string; apiKey: DbApiKey }> {
+  const raw = generateRawApiKey();
+  const keyHash = await hashApiKey(raw);
+  const keyPrefix = raw.slice(0, 10);
+
+  const db = getDb();
+  const { data, error } = await db
+    .from("api_keys")
+    .insert({
+      workspace_id: workspaceId,
+      key_hash: keyHash,
+      key_prefix: keyPrefix,
+      name: name || "",
+    })
+    .select("id, workspace_id, name, key_prefix, created_at")
+    .single();
+  assertNoError(error, "Failed to create API key");
+
+  const row = data as ApiKeyRow;
+  return {
+    key: raw,
+    apiKey: {
+      id: row.id,
+      workspaceId: row.workspace_id,
+      name: row.name,
+      keyPrefix: row.key_prefix,
+      createdAt: row.created_at,
+    },
+  };
+}
+
+export async function getApiKeysForWorkspace(
+  workspaceId: string
+): Promise<DbApiKey[]> {
+  const db = getDb();
+  const { data, error } = await db
+    .from("api_keys")
+    .select("id, workspace_id, name, key_prefix, created_at")
+    .eq("workspace_id", workspaceId)
+    .order("created_at", { ascending: false });
+  assertNoError(error, "Failed to fetch API keys");
+
+  return ((data ?? []) as ApiKeyRow[]).map((row) => ({
+    id: row.id,
+    workspaceId: row.workspace_id,
+    name: row.name,
+    keyPrefix: row.key_prefix,
+    createdAt: row.created_at,
+  }));
+}
+
+export async function deleteApiKey(
+  id: string,
+  workspaceId: string
+): Promise<boolean> {
+  const db = getDb();
+  const { data, error } = await db
+    .from("api_keys")
+    .delete()
+    .eq("id", id)
+    .eq("workspace_id", workspaceId)
+    .select("id");
+  assertNoError(error, "Failed to delete API key");
+  return (data ?? []).length > 0;
+}
+
+export async function getWorkspaceIdByKeyHash(
+  keyHash: string
+): Promise<string | null> {
+  const db = getDb();
+  const { data, error } = await db
+    .from("api_keys")
+    .select("workspace_id")
+    .eq("key_hash", keyHash)
+    .limit(1);
+  assertNoError(error, "Failed to look up API key");
+  const row = (data ?? [])[0] as { workspace_id: string } | undefined;
+  return row?.workspace_id ?? null;
+}
+
+export { hashApiKey };
+
 // --- Workspace Memberships ---
 
 interface WorkspaceMembershipRow {
