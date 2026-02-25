@@ -19,6 +19,7 @@ interface Workspace {
   id: string;
   name: string;
   from: string;
+  fromName: string;
   configSet: string;
   rateLimit: number;
   footerHtml: string;
@@ -78,6 +79,14 @@ interface SendJobSummary {
   total: number;
   sent: number;
   failed: number;
+}
+
+interface ApiKeyMeta {
+  id: string;
+  workspaceId: string;
+  name: string;
+  keyPrefix: string;
+  createdAt: string;
 }
 
 type FieldOperator = "equals" | "notEquals" | "contains" | "notContains";
@@ -531,6 +540,12 @@ export default function ComposePage() {
   const [bodyVibeStatus, setBodyVibeStatus] = useState<string | null>(null);
   const [footerVibeStatus, setFooterVibeStatus] = useState<string | null>(null);
 
+  const [apiKeys, setApiKeys] = useState<ApiKeyMeta[]>([]);
+  const [apiKeysLoading, setApiKeysLoading] = useState(false);
+  const [newKeyName, setNewKeyName] = useState("");
+  const [creatingKey, setCreatingKey] = useState(false);
+  const [newlyCreatedKey, setNewlyCreatedKey] = useState<string | null>(null);
+
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settingsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -666,6 +681,7 @@ export default function ComposePage() {
       .then((data) => {
         const normalized = data.map((workspace) => ({
           ...workspace,
+          fromName: workspace.fromName ?? "",
           contactSourceProvider: workspace.contactSourceProvider ?? "manual",
           contactSourceConfig: workspace.contactSourceConfig ?? {},
         }));
@@ -713,6 +729,15 @@ export default function ComposePage() {
       .then((data) => setHistory(data))
       .catch(console.error)
       .finally(() => setHistoryLoading(false));
+  }, [sessionToken, activeId, fetchJson]);
+
+  useEffect(() => {
+    if (!sessionToken || !activeId) return;
+    setApiKeysLoading(true);
+    fetchJson<ApiKeyMeta[]>(`/api/keys?workspace=${encodeURIComponent(activeId)}`)
+      .then((data) => setApiKeys(data))
+      .catch(console.error)
+      .finally(() => setApiKeysLoading(false));
   }, [sessionToken, activeId, fetchJson]);
 
   useEffect(() => {
@@ -865,6 +890,7 @@ export default function ComposePage() {
       });
       const normalized = {
         ...created,
+        fromName: created.fromName ?? "",
         contactSourceProvider: created.contactSourceProvider ?? "manual",
         contactSourceConfig: created.contactSourceConfig ?? {},
       };
@@ -889,6 +915,49 @@ export default function ComposePage() {
 
   async function addWorkspace() {
     await addWorkspaceById(newWorkspaceId);
+  }
+
+  async function refreshApiKeys() {
+    if (!activeId) return;
+    const data = await fetchJson<ApiKeyMeta[]>(
+      `/api/keys?workspace=${encodeURIComponent(activeId)}`
+    );
+    setApiKeys(data);
+  }
+
+  async function createApiKeyHandler() {
+    if (!activeId || creatingKey) return;
+    setCreatingKey(true);
+    try {
+      const res = await fetchJson<{ key: string }>(
+        "/api/keys",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ workspace: activeId, name: newKeyName.trim() }),
+        }
+      );
+      setNewlyCreatedKey(res.key);
+      setNewKeyName("");
+      await refreshApiKeys();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setCreatingKey(false);
+    }
+  }
+
+  async function deleteApiKeyHandler(id: string) {
+    if (!activeId) return;
+    try {
+      await fetchJson(
+        `/api/keys/${encodeURIComponent(id)}?workspace=${encodeURIComponent(activeId)}`,
+        { method: "DELETE" }
+      );
+      await refreshApiKeys();
+    } catch (e) {
+      console.error(e);
+    }
   }
 
   async function generateVibeHtml(target: "email" | "footer") {
@@ -965,6 +1034,7 @@ export default function ComposePage() {
         body: JSON.stringify({
           id: updated.id,
           from: updated.from,
+          fromName: updated.fromName,
           configSet: updated.configSet,
           rateLimit: updated.rateLimit,
           footerHtml: updated.footerHtml,
@@ -1287,6 +1357,7 @@ export default function ComposePage() {
         body: JSON.stringify({
           workspaceId: workspace.id,
           from: workspace.from,
+          fromName: workspace.fromName,
           to: recipients,
           subject,
           html,
@@ -1582,7 +1653,7 @@ export default function ComposePage() {
               <div>
                 <h1 className="text-xl font-semibold">Compose Email</h1>
                 <p className="text-xs text-gray-400 mt-0.5">
-                  Sending as {workspace.name}
+                  Sending as {workspace.fromName || workspace.name}
                 </p>
                 {!workspace.verified && (
                   <p className="mt-1 text-xs text-amber-700">
@@ -2288,6 +2359,19 @@ export default function ComposePage() {
 
                 <label className="flex flex-col gap-1">
                   <span className="text-sm font-medium text-gray-600">
+                    Send As Name
+                  </span>
+                  <input
+                    type="text"
+                    value={workspace.fromName}
+                    onChange={(e) => updateWorkspace({ fromName: e.target.value })}
+                    placeholder="Your brand or team name"
+                    className="border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
+                  />
+                </label>
+
+                <label className="flex flex-col gap-1">
+                  <span className="text-sm font-medium text-gray-600">
                     SES Configuration Set
                   </span>
                   <input
@@ -2382,6 +2466,97 @@ export default function ComposePage() {
                     className="border border-gray-300 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-black w-32"
                   />
                 </label>
+
+                <div className="mt-4 border-t border-gray-200 pt-4">
+                  <h3 className="text-sm font-semibold text-gray-800">API Keys</h3>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Create keys to access the API programmatically.
+                  </p>
+
+                  {newlyCreatedKey && (
+                    <div className="mt-3 rounded border border-green-300 bg-green-50 p-3">
+                      <p className="text-xs font-medium text-green-800">
+                        Key created — copy it now, it won&apos;t be shown again:
+                      </p>
+                      <div className="mt-1 flex items-center gap-2">
+                        <code className="flex-1 break-all rounded bg-white px-2 py-1 text-xs font-mono text-green-900 border border-green-200">
+                          {newlyCreatedKey}
+                        </code>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(newlyCreatedKey);
+                          }}
+                          className="rounded border border-green-300 bg-white px-2 py-1 text-xs font-medium text-green-700 hover:bg-green-100"
+                        >
+                          Copy
+                        </button>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setNewlyCreatedKey(null)}
+                        className="mt-2 text-xs text-green-600 underline"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="mt-3 flex items-end gap-2">
+                    <label className="flex flex-col gap-1 flex-1">
+                      <span className="text-xs text-gray-500">Key name</span>
+                      <input
+                        type="text"
+                        value={newKeyName}
+                        onChange={(e) => setNewKeyName(e.target.value)}
+                        placeholder="e.g. CI pipeline"
+                        className="border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={createApiKeyHandler}
+                      disabled={creatingKey}
+                      className="rounded bg-black text-white px-3 py-2 text-sm font-medium hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {creatingKey ? "Creating..." : "Create"}
+                    </button>
+                  </div>
+
+                  {apiKeysLoading ? (
+                    <p className="mt-3 text-xs text-gray-400">Loading keys...</p>
+                  ) : apiKeys.length === 0 ? (
+                    <p className="mt-3 text-xs text-gray-400">No API keys yet.</p>
+                  ) : (
+                    <ul className="mt-3 divide-y divide-gray-100">
+                      {apiKeys.map((k) => (
+                        <li
+                          key={k.id}
+                          className="flex items-center justify-between py-2 gap-3"
+                        >
+                          <div className="min-w-0">
+                            <span className="text-sm font-medium text-gray-800 block truncate">
+                              {k.name || "(unnamed)"}
+                            </span>
+                            <span className="text-xs text-gray-400 font-mono">
+                              {k.keyPrefix}...
+                            </span>
+                            <span className="text-xs text-gray-400 ml-2">
+                              {new Date(k.createdAt).toLocaleDateString()}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => deleteApiKeyHandler(k.id)}
+                            className="rounded border border-red-200 px-2 py-1 text-xs text-red-600 hover:bg-red-50"
+                          >
+                            Delete
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               </div>
 
               <div className="flex flex-col gap-2 xl:sticky xl:top-6">

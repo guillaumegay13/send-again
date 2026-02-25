@@ -60,6 +60,7 @@ export const openapiSpec = {
           id: { type: "string", description: "Domain name, e.g. example.com" },
           name: { type: "string" },
           from: { type: "string", format: "email" },
+          fromName: { type: "string", description: "Optional display name for the sender" },
           configSet: { type: "string" },
           rateLimit: { type: "integer" },
           footerHtml: { type: "string" },
@@ -409,6 +410,7 @@ export const openapiSpec = {
                 properties: {
                   id: { type: "string" },
                   from: { type: "string", format: "email" },
+                  fromName: { type: "string", default: "" },
                   configSet: { type: "string", default: "email-tracking-config-set" },
                   rateLimit: { type: "integer", default: 300 },
                   footerHtml: { type: "string", default: "" },
@@ -450,6 +452,7 @@ export const openapiSpec = {
                 properties: {
                   workspaceId: { type: "string" },
                   from: { type: "string", format: "email", description: "Must match workspaceId domain" },
+                  fromName: { type: "string", description: "Optional display name used in the From header" },
                   to: { type: "array", items: { type: "string", format: "email" }, description: "Required when recipientMode is manual" },
                   recipientMode: {
                     type: "string",

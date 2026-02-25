@@ -13,6 +13,7 @@ import { apiErrorResponse, requireAuthenticatedUser } from "@/lib/auth";
 interface SendBody {
   workspaceId: string;
   from: string;
+  fromName: string;
   to: string[];
   recipientMode?: RecipientMode;
   subject: string;
@@ -49,6 +50,11 @@ function normalizeConcurrency(value: unknown): number {
   return Math.max(1, Math.floor(parsed));
 }
 
+function normalizeFromName(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 128);
+}
+
 function parseBooleanLike(value: string | undefined): boolean | null {
   if (!value) return null;
   const normalized = value.trim().toLowerCase();
@@ -78,6 +84,7 @@ function normalizeSendRequestBody(raw: unknown): SendBody {
 
   const workspaceId = String(body.workspaceId ?? "").trim().toLowerCase();
   const from = String(body.from ?? "").trim();
+  const fromName = normalizeFromName(body.fromName);
   const subject = String(body.subject ?? "").trim();
   const html = String(body.html ?? "").trim();
   const footerHtml = String(body.footerHtml ?? "");
@@ -93,6 +100,7 @@ function normalizeSendRequestBody(raw: unknown): SendBody {
   return {
     workspaceId,
     from,
+    fromName,
     to,
     recipientMode,
     subject,
@@ -199,6 +207,7 @@ export async function POST(req: NextRequest) {
     const payload = {
       workspaceId: body.workspaceId,
       from: body.from,
+      fromName: body.fromName,
       subject: body.subject,
       html: body.html,
       configSet: body.configSet,

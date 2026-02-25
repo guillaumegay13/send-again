@@ -554,6 +554,7 @@ export async function filterContactsAgainstUnsubscribes(
 export interface DbWorkspaceSettings {
   id: string;
   from_address: string;
+  from_name: string;
   config_set: string;
   rate_limit: number;
   footer_html: string;
@@ -565,6 +566,7 @@ export interface DbWorkspaceSettings {
 interface WorkspaceSettingsRow {
   id: unknown;
   from_address: unknown;
+  from_name?: unknown;
   config_set: unknown;
   rate_limit: unknown;
   footer_html?: unknown;
@@ -579,6 +581,7 @@ function normalizeWorkspaceSettingsRow(
   return {
     id: String(row.id ?? ""),
     from_address: String(row.from_address ?? ""),
+    from_name: String(row.from_name ?? ""),
     config_set: String(row.config_set ?? "email-tracking-config-set"),
     rate_limit:
       typeof row.rate_limit === "number"
@@ -622,6 +625,7 @@ export async function getWorkspaceSettings(
 export async function upsertWorkspaceSettings(settings: {
   id: string;
   from: string;
+  fromName: string;
   configSet: string;
   rateLimit: number;
   footerHtml: string;
@@ -631,6 +635,7 @@ export async function upsertWorkspaceSettings(settings: {
 }): Promise<void> {
   const db = getDb();
   const optionalColumns = new Set([
+    "from_name",
     "footer_html",
     "website_url",
     "contact_source_provider",
@@ -639,6 +644,7 @@ export async function upsertWorkspaceSettings(settings: {
   const payload: Record<string, unknown> = {
     id: settings.id,
     from_address: settings.from,
+    from_name: settings.fromName,
     config_set: settings.configSet,
     rate_limit: settings.rateLimit,
     footer_html: settings.footerHtml,
@@ -787,6 +793,7 @@ export type SendJobRecipientStatus =
 export interface SendJobPayload {
   workspaceId: string;
   from: string;
+  fromName: string;
   subject: string;
   html: string;
   configSet: string;
@@ -889,6 +896,7 @@ function normalizeSendJobPayload(value: unknown): SendJobPayload {
 
   const workspaceId = String(payload.workspaceId ?? "").trim().toLowerCase();
   const from = String(payload.from ?? "").trim();
+  const fromName = String(payload.fromName ?? "").trim();
   const subject = String(payload.subject ?? "").trim();
   const html = String(payload.html ?? "").trim();
   const configSet = String(payload.configSet ?? "email-tracking-config-set").trim();
@@ -904,6 +912,7 @@ function normalizeSendJobPayload(value: unknown): SendJobPayload {
   return {
     workspaceId,
     from,
+    fromName,
     subject,
     html,
     configSet,
@@ -946,6 +955,7 @@ function normalizeSendJobRow(row: SendJobRowRaw): SendJobPayload & {
     id: row.id,
     workspaceId: payload.workspaceId,
     from: payload.from,
+    fromName: payload.fromName,
     subject: payload.subject,
     html: payload.html,
     configSet: payload.configSet,
@@ -985,6 +995,7 @@ export async function createSendJob(params: {
   const payload = {
     workspaceId: params.payload.workspaceId,
     from: params.payload.from,
+    fromName: params.payload.fromName,
     subject: params.payload.subject,
     html: params.payload.html,
     configSet: params.payload.configSet,
@@ -1232,6 +1243,7 @@ export async function getSendJobWorkerContext(
     payload: {
       workspaceId: normalized.workspaceId,
       from: normalized.from,
+      fromName: normalized.fromName,
       subject: normalized.subject,
       html: normalized.html,
       configSet: normalized.configSet,

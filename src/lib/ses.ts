@@ -29,21 +29,37 @@ export async function listVerifiedDomains(): Promise<string[]> {
   );
 }
 
+function formatSourceAddress(from: string, fromName?: string): string {
+  const normalizedName = (fromName ?? "")
+    .replace(/[\r\n]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!normalizedName) return from;
+
+  const escapedName = normalizedName
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"');
+  return `"${escapedName}" <${from}>`;
+}
+
 export async function sendEmail({
   from,
+  fromName,
   to,
   subject,
   html,
   configSet,
 }: {
   from: string;
+  fromName?: string;
   to: string;
   subject: string;
   html: string;
   configSet: string;
 }) {
   const cmd = new SendEmailCommand({
-    Source: from,
+    Source: formatSourceAddress(from, fromName),
     Destination: { ToAddresses: [to] },
     Message: {
       Subject: { Data: subject, Charset: "UTF-8" },

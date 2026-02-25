@@ -22,6 +22,11 @@ function normalizeWebsiteUrl(value: unknown): string | null {
   }
 }
 
+function normalizeFromName(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 128);
+}
+
 function normalizeContactSourceProvider(value: unknown): ContactSourceProvider {
   if (value === "http_json") return "http_json";
   if (value === "airconcierge") return "http_json";
@@ -48,6 +53,7 @@ export async function PUT(req: NextRequest) {
     const {
       id,
       from,
+      fromName,
       configSet,
       rateLimit,
       footerHtml,
@@ -87,6 +93,7 @@ export async function PUT(req: NextRequest) {
     await upsertWorkspaceSettings({
       id,
       from,
+      fromName: normalizeFromName(fromName),
       configSet: configSet ?? "email-tracking-config-set",
       rateLimit: rateLimit ?? 300,
       footerHtml: typeof footerHtml === "string" ? footerHtml : "",

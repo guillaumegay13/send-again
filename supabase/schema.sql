@@ -1,6 +1,7 @@
 create table if not exists workspace_settings (
   id text primary key,
   from_address text not null,
+  from_name text not null default '',
   config_set text not null default 'email-tracking-config-set',
   rate_limit integer not null default 300,
   footer_html text not null default '',
@@ -8,6 +9,9 @@ create table if not exists workspace_settings (
   contact_source_provider text not null default 'manual',
   contact_source_config jsonb not null default '{}'::jsonb
 );
+
+alter table if exists workspace_settings
+  add column if not exists from_name text not null default '';
 
 alter table if exists workspace_settings
   add column if not exists footer_html text not null default '';

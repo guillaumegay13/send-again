@@ -299,6 +299,7 @@ async function processSendJob(
           try {
             const result = await sendEmail({
               from: context.payload.from,
+              fromName: context.payload.fromName,
               to: recipient.recipient,
               subject,
               html,
