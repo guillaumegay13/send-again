@@ -557,7 +557,6 @@ export default function ComposePage() {
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const settingsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settingsSavedResetRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
   );
@@ -892,10 +891,6 @@ export default function ComposePage() {
   useEffect(() => {
     return () => {
       stopSendPolling();
-      if (settingsDebounceRef.current) {
-        clearTimeout(settingsDebounceRef.current);
-        settingsDebounceRef.current = null;
-      }
       clearSettingsSavedResetTimer();
     };
   }, [clearSettingsSavedResetTimer, stopSendPolling]);
@@ -1136,19 +1131,10 @@ export default function ComposePage() {
     setSettingsSaveState("dirty");
     setSettingsSaveMessage(null);
     setSettingsSavedAtLabel(null);
-
-    if (settingsDebounceRef.current) clearTimeout(settingsDebounceRef.current);
-    settingsDebounceRef.current = setTimeout(() => {
-      void persistWorkspaceSettings(updated);
-    }, 700);
   }
 
   async function saveWorkspaceSettingsNow() {
     if (!sessionToken || !workspace) return;
-    if (settingsDebounceRef.current) {
-      clearTimeout(settingsDebounceRef.current);
-      settingsDebounceRef.current = null;
-    }
     await persistWorkspaceSettings(workspace);
   }
 
@@ -2467,30 +2453,8 @@ export default function ComposePage() {
 
         {tab === "settings" && (
           <div className="flex-1 p-6 overflow-y-auto">
-            <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h1 className="text-xl font-semibold mb-1">Settings</h1>
-                <p className="text-xs text-gray-400">{workspace.name}</p>
-              </div>
-              <div className="flex flex-col items-end gap-1">
-                <button
-                  type="button"
-                  onClick={() => void saveWorkspaceSettingsNow()}
-                  disabled={!canSaveSettings}
-                  className="rounded bg-black px-3 py-2 text-xs font-semibold text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {isSettingsSaving ? "Saving..." : "Save settings"}
-                </button>
-                {settingsStatusText && (
-                  <p
-                    aria-live="polite"
-                    className={`max-w-xs text-right text-xs ${settingsStatusClass}`}
-                  >
-                    {settingsStatusText}
-                  </p>
-                )}
-              </div>
-            </div>
+            <h1 className="text-xl font-semibold mb-1">Settings</h1>
+            <p className="text-xs text-gray-400 mb-6">{workspace.name}</p>
 
             <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_26rem] gap-6 items-start">
               <div className="flex flex-col gap-5 max-w-xl">
@@ -2615,6 +2579,25 @@ export default function ComposePage() {
                     className="border border-gray-300 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-black w-32"
                   />
                 </label>
+
+                <div className="flex flex-wrap items-center gap-3 rounded border border-gray-200 bg-gray-50 p-3">
+                  <button
+                    type="button"
+                    onClick={() => void saveWorkspaceSettingsNow()}
+                    disabled={!canSaveSettings}
+                    className="rounded bg-black px-3 py-2 text-xs font-semibold text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {isSettingsSaving ? "Saving..." : "Save settings"}
+                  </button>
+                  {settingsStatusText && (
+                    <p
+                      aria-live="polite"
+                      className={`text-xs ${settingsStatusClass}`}
+                    >
+                      {settingsStatusText}
+                    </p>
+                  )}
+                </div>
 
                 <div className="mt-4 border-t border-gray-200 pt-4">
                   <h3 className="text-sm font-semibold text-gray-800">API Keys</h3>

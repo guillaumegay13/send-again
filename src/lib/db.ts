@@ -43,10 +43,15 @@ function getMissingWorkspaceSettingsColumn(
   error: { message: string } | null
 ): string | null {
   if (!error) return null;
-  const match = error.message.match(
+  const relationMatch = error.message.match(
     /column ["']?([a-z_]+)["']? of relation ["']workspace_settings["'] does not exist/i
   );
-  return match?.[1] ?? null;
+  if (relationMatch?.[1]) return relationMatch[1];
+
+  const schemaCacheMatch = error.message.match(
+    /could not find the ['"]([a-z_]+)['"] column of ['"](?:public\.)?workspace_settings['"] in the schema cache/i
+  );
+  return schemaCacheMatch?.[1] ?? null;
 }
 
 function getMissingRelation(error: { message: string } | null): string | null {
