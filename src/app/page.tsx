@@ -112,6 +112,7 @@ type HistoryCondition = {
 type RecipientCondition = FieldCondition | HistoryCondition;
 
 type HistoryEventIndex = Map<HistoryEventType, Map<string, Set<string>>>;
+type SettingsSaveState = "idle" | "dirty" | "saving" | "saved" | "error";
 
 function createConditionId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -539,6 +540,14 @@ export default function ComposePage() {
   const [footerVibeBusy, setFooterVibeBusy] = useState(false);
   const [bodyVibeStatus, setBodyVibeStatus] = useState<string | null>(null);
   const [footerVibeStatus, setFooterVibeStatus] = useState<string | null>(null);
+  const [settingsSaveState, setSettingsSaveState] =
+    useState<SettingsSaveState>("idle");
+  const [settingsSaveMessage, setSettingsSaveMessage] = useState<string | null>(
+    null
+  );
+  const [settingsSavedAtLabel, setSettingsSavedAtLabel] = useState<string | null>(
+    null
+  );
 
   const [apiKeys, setApiKeys] = useState<ApiKeyMeta[]>([]);
   const [apiKeysLoading, setApiKeysLoading] = useState(false);
@@ -549,6 +558,11 @@ export default function ComposePage() {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settingsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const settingsSavedResetRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const settingsSaveRequestSeqRef = useRef(0);
+  const activeWorkspaceIdRef = useRef<string | null>(null);
   const contactDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sendJobPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const sendJobInFlightRef = useRef(false);
@@ -579,6 +593,79 @@ export default function ComposePage() {
       return payload as T;
     },
     [authFetch]
+  );
+
+  const clearSettingsSavedResetTimer = useCallback(() => {
+    if (!settingsSavedResetRef.current) return;
+    clearTimeout(settingsSavedResetRef.current);
+    settingsSavedResetRef.current = null;
+  }, []);
+
+  const buildWorkspaceSettingsPayload = useCallback((value: Workspace) => {
+    return {
+      id: value.id,
+      from: value.from,
+      fromName: value.fromName,
+      configSet: value.configSet,
+      rateLimit: value.rateLimit,
+      footerHtml: value.footerHtml,
+      websiteUrl: value.websiteUrl,
+      contactSourceProvider: value.contactSourceProvider,
+      contactSourceConfig: value.contactSourceConfig,
+    };
+  }, []);
+
+  const persistWorkspaceSettings = useCallback(
+    async (value: Workspace) => {
+      const isActiveWorkspace = activeWorkspaceIdRef.current === value.id;
+      const requestSeq = ++settingsSaveRequestSeqRef.current;
+
+      if (isActiveWorkspace) {
+        clearSettingsSavedResetTimer();
+        setSettingsSaveState("saving");
+        setSettingsSaveMessage(null);
+      }
+
+      try {
+        await fetchJson<{ ok: boolean }>("/api/workspaces/settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(buildWorkspaceSettingsPayload(value)),
+        });
+
+        if (requestSeq !== settingsSaveRequestSeqRef.current) return;
+        if (activeWorkspaceIdRef.current !== value.id) return;
+
+        setSettingsSaveState("saved");
+        setSettingsSaveMessage(null);
+        setSettingsSavedAtLabel(
+          new Intl.DateTimeFormat(undefined, {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+          }).format(new Date())
+        );
+
+        clearSettingsSavedResetTimer();
+        settingsSavedResetRef.current = setTimeout(() => {
+          setSettingsSaveState((current) =>
+            current === "saved" ? "idle" : current
+          );
+          setSettingsSavedAtLabel(null);
+          settingsSavedResetRef.current = null;
+        }, 2500);
+      } catch (error) {
+        if (requestSeq !== settingsSaveRequestSeqRef.current) return;
+        if (activeWorkspaceIdRef.current !== value.id) return;
+
+        setSettingsSaveState("error");
+        setSettingsSavedAtLabel(null);
+        setSettingsSaveMessage(
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+    },
+    [buildWorkspaceSettingsPayload, clearSettingsSavedResetTimer, fetchJson]
   );
 
   const stopSendPolling = useCallback(() => {
@@ -706,6 +793,15 @@ export default function ComposePage() {
   }, [sessionToken, fetchJson]);
 
   useEffect(() => {
+    activeWorkspaceIdRef.current = activeId;
+    settingsSaveRequestSeqRef.current += 1;
+    clearSettingsSavedResetTimer();
+    setSettingsSaveState("idle");
+    setSettingsSaveMessage(null);
+    setSettingsSavedAtLabel(null);
+  }, [activeId, clearSettingsSavedResetTimer]);
+
+  useEffect(() => {
     if (!sessionToken || !activeId) return;
     // Skip if we already have contacts loaded for this workspace
     if (contactsMap[activeId] !== undefined) return;
@@ -796,8 +892,13 @@ export default function ComposePage() {
   useEffect(() => {
     return () => {
       stopSendPolling();
+      if (settingsDebounceRef.current) {
+        clearTimeout(settingsDebounceRef.current);
+        settingsDebounceRef.current = null;
+      }
+      clearSettingsSavedResetTimer();
     };
-  }, [stopSendPolling]);
+  }, [clearSettingsSavedResetTimer, stopSendPolling]);
 
   async function handleSignIn() {
     setLoggingIn(true);
@@ -1021,29 +1122,34 @@ export default function ComposePage() {
 
   function updateWorkspace(patch: Partial<Workspace>) {
     if (!activeId || !workspace || !sessionToken) return;
+    const changed = Object.entries(patch).some(
+      ([key, value]) => workspace[key as keyof Workspace] !== value
+    );
+    if (!changed) return;
+
     const updated = { ...workspace, ...patch };
     setWorkspaces((prev) =>
       prev.map((w) => (w.id === activeId ? updated : w))
     );
-    // Debounce persist to DB
+
+    clearSettingsSavedResetTimer();
+    setSettingsSaveState("dirty");
+    setSettingsSaveMessage(null);
+    setSettingsSavedAtLabel(null);
+
     if (settingsDebounceRef.current) clearTimeout(settingsDebounceRef.current);
     settingsDebounceRef.current = setTimeout(() => {
-      fetchJson<{ ok: boolean }>("/api/workspaces/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: updated.id,
-          from: updated.from,
-          fromName: updated.fromName,
-          configSet: updated.configSet,
-          rateLimit: updated.rateLimit,
-          footerHtml: updated.footerHtml,
-          websiteUrl: updated.websiteUrl,
-          contactSourceProvider: updated.contactSourceProvider,
-          contactSourceConfig: updated.contactSourceConfig,
-        }),
-      }).catch(console.error);
-    }, 500);
+      void persistWorkspaceSettings(updated);
+    }, 700);
+  }
+
+  async function saveWorkspaceSettingsNow() {
+    if (!sessionToken || !workspace) return;
+    if (settingsDebounceRef.current) {
+      clearTimeout(settingsDebounceRef.current);
+      settingsDebounceRef.current = null;
+    }
+    await persistWorkspaceSettings(workspace);
   }
 
   function setLocalContacts(list: Contact[]) {
@@ -1564,6 +1670,27 @@ export default function ComposePage() {
       </div>
     );
   }
+
+  const isSettingsSaving = settingsSaveState === "saving";
+  const canSaveSettings =
+    !isSettingsSaving &&
+    (settingsSaveState === "dirty" || settingsSaveState === "error");
+  const settingsStatusText =
+    settingsSaveState === "dirty"
+      ? "Unsaved changes"
+      : settingsSaveState === "saving"
+      ? "Saving settings..."
+      : settingsSaveState === "saved"
+      ? `Saved at ${settingsSavedAtLabel ?? "just now"}`
+      : settingsSaveState === "error"
+      ? `Save failed: ${settingsSaveMessage ?? "Unknown error"}`
+      : null;
+  const settingsStatusClass =
+    settingsSaveState === "saved"
+      ? "text-green-700"
+      : settingsSaveState === "error"
+      ? "text-red-700"
+      : "text-gray-500";
 
   return (
     <div className="flex h-screen">
@@ -2340,8 +2467,30 @@ export default function ComposePage() {
 
         {tab === "settings" && (
           <div className="flex-1 p-6 overflow-y-auto">
-            <h1 className="text-xl font-semibold mb-1">Settings</h1>
-            <p className="text-xs text-gray-400 mb-6">{workspace.name}</p>
+            <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h1 className="text-xl font-semibold mb-1">Settings</h1>
+                <p className="text-xs text-gray-400">{workspace.name}</p>
+              </div>
+              <div className="flex flex-col items-end gap-1">
+                <button
+                  type="button"
+                  onClick={() => void saveWorkspaceSettingsNow()}
+                  disabled={!canSaveSettings}
+                  className="rounded bg-black px-3 py-2 text-xs font-semibold text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isSettingsSaving ? "Saving..." : "Save settings"}
+                </button>
+                {settingsStatusText && (
+                  <p
+                    aria-live="polite"
+                    className={`max-w-xs text-right text-xs ${settingsStatusClass}`}
+                  >
+                    {settingsStatusText}
+                  </p>
+                )}
+              </div>
+            </div>
 
             <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_26rem] gap-6 items-start">
               <div className="flex flex-col gap-5 max-w-xl">
