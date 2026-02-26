@@ -90,6 +90,34 @@ function renderPage({
 </html>`;
 }
 
+export async function POST(req: NextRequest) {
+  const workspace = (req.nextUrl.searchParams.get("workspace") ?? "")
+    .trim()
+    .toLowerCase();
+  const email = (req.nextUrl.searchParams.get("email") ?? "").trim();
+  const token = (req.nextUrl.searchParams.get("token") ?? "").trim();
+
+  if (!workspace || !email || !token) {
+    return NextResponse.json({ error: "Missing parameters" }, { status: 400 });
+  }
+
+  if (!verifyUnsubscribeToken(workspace, email, token)) {
+    return NextResponse.json({ error: "Invalid token" }, { status: 400 });
+  }
+
+  try {
+    await markContactUnsubscribed(workspace, email);
+    await deleteContact(workspace, email);
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    console.error("Unsubscribe POST failed:", error);
+    return NextResponse.json(
+      { error: "Unsubscribe failed" },
+      { status: 500 }
+    );
+  }
+}
+
 export async function GET(req: NextRequest) {
   const workspace = (req.nextUrl.searchParams.get("workspace") ?? "")
     .trim()

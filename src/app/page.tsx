@@ -89,6 +89,14 @@ interface ApiKeyMeta {
   createdAt: string;
 }
 
+interface SetupStatus {
+  verificationToken: string | null;
+  verificationStatus: "NotStarted" | "Pending" | "Success" | "Failed";
+  dkimTokens: string[];
+  dkimStatus: "NotStarted" | "Pending" | "Success" | "Failed";
+  configSetExists: boolean;
+}
+
 type FieldOperator = "equals" | "notEquals" | "contains" | "notContains";
 type ConditionMatchMode = "all" | "any";
 type HistoryEventType = "send" | "delivery" | "open" | "click" | "bounce" | "complaint";
@@ -555,6 +563,11 @@ export default function ComposePage() {
   const [creatingKey, setCreatingKey] = useState(false);
   const [newlyCreatedKey, setNewlyCreatedKey] = useState<string | null>(null);
 
+  const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
+  const [setupLoading, setSetupLoading] = useState(false);
+  const [setupActionLoading, setSetupActionLoading] = useState<string | null>(null);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settingsSavedResetRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -894,6 +907,54 @@ export default function ComposePage() {
       clearSettingsSavedResetTimer();
     };
   }, [clearSettingsSavedResetTimer, stopSendPolling]);
+
+  const fetchSetupStatus = useCallback(async () => {
+    if (!workspace) return;
+    setSetupLoading(true);
+    try {
+      const data = await fetchJson<SetupStatus>(
+        `/api/workspaces/setup?domain=${encodeURIComponent(workspace.id)}&configSet=${encodeURIComponent(workspace.configSet)}`
+      );
+      setSetupStatus(data);
+    } catch (e) {
+      console.error("Failed to fetch setup status:", e);
+    } finally {
+      setSetupLoading(false);
+    }
+  }, [workspace?.id, workspace?.configSet, fetchJson]);
+
+  useEffect(() => {
+    if (tab === "settings" && sessionToken && workspace) {
+      fetchSetupStatus();
+    }
+  }, [tab, sessionToken, workspace?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function runSetupAction(action: string) {
+    if (!workspace) return;
+    setSetupActionLoading(action);
+    try {
+      await fetchJson("/api/workspaces/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          domain: workspace.id,
+          action,
+          configSet: workspace.configSet,
+        }),
+      });
+      await fetchSetupStatus();
+    } catch (e) {
+      console.error(`Setup action ${action} failed:`, e);
+    } finally {
+      setSetupActionLoading(null);
+    }
+  }
+
+  function copyToClipboard(text: string, field: string) {
+    navigator.clipboard.writeText(text);
+    setCopiedField(field);
+    setTimeout(() => setCopiedField((c) => (c === field ? null : c)), 2000);
+  }
 
   async function handleSignIn() {
     setLoggingIn(true);
@@ -2455,6 +2516,232 @@ export default function ComposePage() {
           <div className="flex-1 p-6 overflow-y-auto">
             <h1 className="text-xl font-semibold mb-1">Settings</h1>
             <p className="text-xs text-gray-400 mb-6">{workspace.name}</p>
+
+            <div className="rounded border border-gray-200 bg-gray-50 p-4 mb-6">
+              <div className="flex items-center justify-between mb-1">
+                <p className="text-sm font-semibold text-gray-800">Email Deliverability Setup</p>
+                <button
+                  type="button"
+                  onClick={() => fetchSetupStatus()}
+                  disabled={setupLoading}
+                  className="rounded border border-gray-300 bg-white px-2 py-1 text-[11px] font-medium text-gray-600 hover:bg-gray-100 disabled:opacity-50"
+                >
+                  {setupLoading ? "Checking..." : "Refresh status"}
+                </button>
+              </div>
+              <p className="text-xs text-gray-500 mb-3">
+                Complete these steps to ensure your emails reach the inbox instead of spam.
+              </p>
+              <div className="flex flex-col gap-3">
+
+                {/* 1. Verify domain */}
+                <div className="rounded border border-gray-200 bg-white p-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      {setupStatus?.verificationStatus === "Success" ? (
+                        <span className="h-4 w-4 shrink-0 rounded-full bg-green-500 flex items-center justify-center text-white text-[10px]">✓</span>
+                      ) : setupStatus?.verificationStatus === "Pending" ? (
+                        <span className="h-4 w-4 shrink-0 rounded-full bg-yellow-400" />
+                      ) : (
+                        <span className="h-4 w-4 shrink-0 rounded border border-gray-300 bg-white" />
+                      )}
+                      <p className="text-sm text-gray-700 font-medium">Verify domain in AWS SES</p>
+                      {setupStatus && (
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                          setupStatus.verificationStatus === "Success" ? "bg-green-100 text-green-700" :
+                          setupStatus.verificationStatus === "Pending" ? "bg-yellow-100 text-yellow-700" :
+                          setupStatus.verificationStatus === "Failed" ? "bg-red-100 text-red-700" :
+                          "bg-gray-100 text-gray-500"
+                        }`}>
+                          {setupStatus.verificationStatus === "NotStarted" ? "Not started" : setupStatus.verificationStatus}
+                        </span>
+                      )}
+                    </div>
+                    {(!setupStatus || setupStatus.verificationStatus === "NotStarted") && (
+                      <button
+                        type="button"
+                        onClick={() => runSetupAction("verify-domain")}
+                        disabled={setupActionLoading === "verify-domain"}
+                        className="rounded border border-gray-300 bg-white px-2 py-1 text-[11px] font-medium hover:bg-gray-100 disabled:opacity-50"
+                      >
+                        {setupActionLoading === "verify-domain" ? "Starting..." : "Start verification"}
+                      </button>
+                    )}
+                  </div>
+                  {setupStatus?.verificationToken && (
+                    <div className="mt-2 rounded bg-gray-50 p-2">
+                      <p className="text-[11px] text-gray-500 mb-1">Add this TXT record to your DNS:</p>
+                      <div className="flex items-center gap-2">
+                        <code className="flex-1 break-all bg-gray-100 px-2 py-1 rounded text-[11px] font-mono">
+                          _amazonses.{workspace.id} → {setupStatus.verificationToken}
+                        </code>
+                        <button
+                          type="button"
+                          onClick={() => copyToClipboard(setupStatus.verificationToken!, "verif-token")}
+                          className="shrink-0 rounded border border-gray-300 bg-white px-2 py-1 text-[10px] font-medium hover:bg-gray-100"
+                        >
+                          {copiedField === "verif-token" ? "Copied!" : "Copy"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* 2. SPF */}
+                <div className="rounded border border-gray-200 bg-white p-3">
+                  <div className="flex items-center gap-2">
+                    <span className="h-4 w-4 shrink-0 rounded border border-gray-300 bg-white" />
+                    <p className="text-sm text-gray-700 font-medium">Add SPF record</p>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-gray-100 text-gray-500">Manual</span>
+                  </div>
+                  <div className="mt-2 rounded bg-gray-50 p-2">
+                    <p className="text-[11px] text-gray-500 mb-1">Add this TXT record on <code className="bg-gray-200 px-1 rounded text-[11px]">{workspace.id}</code>:</p>
+                    <div className="flex items-center gap-2">
+                      <code className="flex-1 break-all bg-gray-100 px-2 py-1 rounded text-[11px] font-mono">
+                        v=spf1 include:amazonses.com ~all
+                      </code>
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard("v=spf1 include:amazonses.com ~all", "spf")}
+                        className="shrink-0 rounded border border-gray-300 bg-white px-2 py-1 text-[10px] font-medium hover:bg-gray-100"
+                      >
+                        {copiedField === "spf" ? "Copied!" : "Copy"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3. DKIM */}
+                <div className="rounded border border-gray-200 bg-white p-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      {setupStatus?.dkimStatus === "Success" ? (
+                        <span className="h-4 w-4 shrink-0 rounded-full bg-green-500 flex items-center justify-center text-white text-[10px]">✓</span>
+                      ) : setupStatus?.dkimStatus === "Pending" ? (
+                        <span className="h-4 w-4 shrink-0 rounded-full bg-yellow-400" />
+                      ) : (
+                        <span className="h-4 w-4 shrink-0 rounded border border-gray-300 bg-white" />
+                      )}
+                      <p className="text-sm text-gray-700 font-medium">Set up DKIM</p>
+                      {setupStatus && (
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                          setupStatus.dkimStatus === "Success" ? "bg-green-100 text-green-700" :
+                          setupStatus.dkimStatus === "Pending" ? "bg-yellow-100 text-yellow-700" :
+                          setupStatus.dkimStatus === "Failed" ? "bg-red-100 text-red-700" :
+                          "bg-gray-100 text-gray-500"
+                        }`}>
+                          {setupStatus.dkimStatus === "NotStarted" ? "Not started" : setupStatus.dkimStatus}
+                        </span>
+                      )}
+                    </div>
+                    {(!setupStatus || (setupStatus.dkimStatus === "NotStarted" && setupStatus.dkimTokens.length === 0)) && (
+                      <button
+                        type="button"
+                        onClick={() => runSetupAction("setup-dkim")}
+                        disabled={setupActionLoading === "setup-dkim"}
+                        className="rounded border border-gray-300 bg-white px-2 py-1 text-[11px] font-medium hover:bg-gray-100 disabled:opacity-50"
+                      >
+                        {setupActionLoading === "setup-dkim" ? "Generating..." : "Generate DKIM"}
+                      </button>
+                    )}
+                  </div>
+                  {setupStatus && setupStatus.dkimTokens.length > 0 && (
+                    <div className="mt-2 rounded bg-gray-50 p-2">
+                      <p className="text-[11px] text-gray-500 mb-1">Add these 3 CNAME records to your DNS:</p>
+                      <div className="flex flex-col gap-1.5">
+                        {setupStatus.dkimTokens.map((token, i) => (
+                          <div key={token} className="flex items-center gap-2">
+                            <code className="flex-1 break-all bg-gray-100 px-2 py-1 rounded text-[11px] font-mono">
+                              {token}._domainkey.{workspace.id} → {token}.dkim.amazonses.com
+                            </code>
+                            <button
+                              type="button"
+                              onClick={() => copyToClipboard(`${token}._domainkey.${workspace.id} CNAME ${token}.dkim.amazonses.com`, `dkim-${i}`)}
+                              className="shrink-0 rounded border border-gray-300 bg-white px-2 py-1 text-[10px] font-medium hover:bg-gray-100"
+                            >
+                              {copiedField === `dkim-${i}` ? "Copied!" : "Copy"}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* 4. DMARC */}
+                <div className="rounded border border-gray-200 bg-white p-3">
+                  <div className="flex items-center gap-2">
+                    <span className="h-4 w-4 shrink-0 rounded border border-gray-300 bg-white" />
+                    <p className="text-sm text-gray-700 font-medium">Add DMARC record</p>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-gray-100 text-gray-500">Manual</span>
+                  </div>
+                  <div className="mt-2 rounded bg-gray-50 p-2">
+                    <p className="text-[11px] text-gray-500 mb-1">Add this TXT record at <code className="bg-gray-200 px-1 rounded text-[11px]">_dmarc.{workspace.id}</code>:</p>
+                    <div className="flex items-center gap-2">
+                      <code className="flex-1 break-all bg-gray-100 px-2 py-1 rounded text-[11px] font-mono">
+                        v=DMARC1; p=quarantine; rua=mailto:dmarc@{workspace.id}
+                      </code>
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard(`v=DMARC1; p=quarantine; rua=mailto:dmarc@${workspace.id}`, "dmarc")}
+                        className="shrink-0 rounded border border-gray-300 bg-white px-2 py-1 text-[10px] font-medium hover:bg-gray-100"
+                      >
+                        {copiedField === "dmarc" ? "Copied!" : "Copy"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 5. Unsubscribe mailbox */}
+                <div className="rounded border border-gray-200 bg-white p-3">
+                  <div className="flex items-center gap-2">
+                    <span className="h-4 w-4 shrink-0 rounded border border-gray-300 bg-white" />
+                    <p className="text-sm text-gray-700 font-medium">Create unsubscribe mailbox</p>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-gray-100 text-gray-500">Manual</span>
+                  </div>
+                  <p className="mt-1 ml-6 text-xs text-gray-500">
+                    Create{" "}
+                    <code className="bg-gray-200 px-1 rounded text-[11px]">unsubscribe@{workspace.id}</code>{" "}
+                    (or an alias) so List-Unsubscribe replies don&apos;t bounce.
+                  </p>
+                </div>
+
+                {/* 6. Configuration set */}
+                <div className="rounded border border-gray-200 bg-white p-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      {setupStatus?.configSetExists ? (
+                        <span className="h-4 w-4 shrink-0 rounded-full bg-green-500 flex items-center justify-center text-white text-[10px]">✓</span>
+                      ) : (
+                        <span className="h-4 w-4 shrink-0 rounded border border-gray-300 bg-white" />
+                      )}
+                      <p className="text-sm text-gray-700 font-medium">SES Configuration Set</p>
+                      {setupStatus && (
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                          setupStatus.configSetExists ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
+                        }`}>
+                          {setupStatus.configSetExists ? "Done" : "Not created"}
+                        </span>
+                      )}
+                    </div>
+                    {setupStatus && !setupStatus.configSetExists && (
+                      <button
+                        type="button"
+                        onClick={() => runSetupAction("create-config-set")}
+                        disabled={setupActionLoading === "create-config-set"}
+                        className="rounded border border-gray-300 bg-white px-2 py-1 text-[11px] font-medium hover:bg-gray-100 disabled:opacity-50"
+                      >
+                        {setupActionLoading === "create-config-set" ? "Creating..." : "Create"}
+                      </button>
+                    )}
+                  </div>
+                  <p className="mt-1 ml-6 text-xs text-gray-500">
+                    Configuration set <code className="bg-gray-200 px-1 rounded text-[11px]">{workspace.configSet}</code> for tracking bounces and complaints.
+                  </p>
+                </div>
+
+              </div>
+            </div>
 
             <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_26rem] gap-6 items-start">
               <div className="flex flex-col gap-5 max-w-xl">

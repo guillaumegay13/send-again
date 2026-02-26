@@ -806,7 +806,6 @@ export interface SendJobPayload {
   footerHtml: string;
   websiteUrl: string;
   baseUrl: string;
-  unsubscribeEmail: string;
 }
 
 export interface SendJobProgress {
@@ -909,7 +908,6 @@ function normalizeSendJobPayload(value: unknown): SendJobPayload {
   const footerHtml = String(payload.footerHtml ?? "").trim();
   const websiteUrl = String(payload.websiteUrl ?? "").trim();
   const baseUrl = String(payload.baseUrl ?? "").trim();
-  const unsubscribeEmail = String(payload.unsubscribeEmail ?? "").trim();
   const rateLimit = normalizeNonNegativeInteger(payload.rateLimit, 300);
 
   if (!workspaceId || !from || !subject || !html || !baseUrl) {
@@ -927,7 +925,6 @@ function normalizeSendJobPayload(value: unknown): SendJobPayload {
     footerHtml,
     websiteUrl,
     baseUrl,
-    unsubscribeEmail,
   };
 }
 
@@ -971,7 +968,6 @@ function normalizeSendJobRow(row: SendJobRowRaw): SendJobPayload & {
     footerHtml: payload.footerHtml,
     websiteUrl: payload.websiteUrl,
     baseUrl: payload.baseUrl,
-    unsubscribeEmail: payload.unsubscribeEmail,
     userId: row.user_id,
     status: normalizeSendJobStatus(row.status),
     total: normalizeNonNegativeInteger(row.total, 0),
@@ -1012,7 +1008,6 @@ export async function createSendJob(params: {
     footerHtml: params.payload.footerHtml,
     websiteUrl: params.payload.websiteUrl,
     baseUrl: params.payload.baseUrl,
-    unsubscribeEmail: params.payload.unsubscribeEmail,
   };
 
   const { error } = await db.from("send_jobs").insert({
@@ -1261,7 +1256,6 @@ export async function getSendJobWorkerContext(
       footerHtml: normalized.footerHtml,
       websiteUrl: normalized.websiteUrl,
       baseUrl: normalized.baseUrl,
-      unsubscribeEmail: normalized.unsubscribeEmail,
     },
     rateLimit: normalized.rateLimit,
     batchSize: normalized.batchSize,

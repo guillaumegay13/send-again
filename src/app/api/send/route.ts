@@ -216,7 +216,6 @@ export async function POST(req: NextRequest) {
       footerHtml: body.footerHtml,
       websiteUrl: body.websiteUrl,
       baseUrl,
-      unsubscribeEmail: `unsubscribe@${body.workspaceId}`,
     };
 
     if (body.dryRun) {

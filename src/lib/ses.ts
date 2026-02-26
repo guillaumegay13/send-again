@@ -3,6 +3,11 @@ import {
   SendRawEmailCommand,
   ListIdentitiesCommand,
   GetIdentityVerificationAttributesCommand,
+  GetIdentityDkimAttributesCommand,
+  VerifyDomainIdentityCommand,
+  VerifyDomainDkimCommand,
+  CreateConfigurationSetCommand,
+  DescribeConfigurationSetCommand,
 } from "@aws-sdk/client-ses";
 
 const ses = new SESClient({
@@ -27,6 +32,77 @@ export async function listVerifiedDomains(): Promise<string[]> {
   return identities.filter(
     (id) => attrs[id]?.VerificationStatus === "Success"
   );
+}
+
+export async function verifyDomain(domain: string): Promise<string> {
+  const res = await ses.send(
+    new VerifyDomainIdentityCommand({ Domain: domain })
+  );
+  return res.VerificationToken ?? "";
+}
+
+export type SetupStatus = "NotStarted" | "Pending" | "Success" | "Failed";
+
+export interface DomainSetupStatus {
+  verificationToken: string | null;
+  verificationStatus: SetupStatus;
+  dkimTokens: string[];
+  dkimStatus: SetupStatus;
+}
+
+export async function getDomainSetupStatus(
+  domain: string
+): Promise<DomainSetupStatus> {
+  const [verif, dkim] = await Promise.all([
+    ses.send(
+      new GetIdentityVerificationAttributesCommand({ Identities: [domain] })
+    ),
+    ses.send(
+      new GetIdentityDkimAttributesCommand({ Identities: [domain] })
+    ),
+  ]);
+
+  const verifAttrs = verif.VerificationAttributes?.[domain];
+  const dkimAttrs = dkim.DkimAttributes?.[domain];
+
+  return {
+    verificationToken: verifAttrs?.VerificationToken ?? null,
+    verificationStatus: (verifAttrs?.VerificationStatus as SetupStatus) ?? "NotStarted",
+    dkimTokens: dkimAttrs?.DkimTokens ?? [],
+    dkimStatus: dkimAttrs?.DkimVerificationStatus
+      ? (dkimAttrs.DkimVerificationStatus as SetupStatus)
+      : "NotStarted",
+  };
+}
+
+export async function setupDkim(domain: string): Promise<string[]> {
+  const res = await ses.send(new VerifyDomainDkimCommand({ Domain: domain }));
+  return res.DkimTokens ?? [];
+}
+
+export async function createConfigurationSet(name: string): Promise<void> {
+  await ses.send(
+    new CreateConfigurationSetCommand({
+      ConfigurationSet: { Name: name },
+    })
+  );
+}
+
+export async function configurationSetExists(name: string): Promise<boolean> {
+  try {
+    await ses.send(
+      new DescribeConfigurationSetCommand({ ConfigurationSetName: name })
+    );
+    return true;
+  } catch (err: unknown) {
+    if (
+      err instanceof Error &&
+      err.name === "ConfigurationSetDoesNotExistException"
+    ) {
+      return false;
+    }
+    throw err;
+  }
 }
 
 function formatSourceAddress(from: string, fromName?: string): string {
@@ -68,14 +144,14 @@ function buildRawMessage({
   subject,
   html,
   plainText,
-  unsubscribeEmail,
+  unsubscribeUrl,
 }: {
   from: string;
   to: string;
   subject: string;
   html: string;
   plainText: string;
-  unsubscribeEmail?: string;
+  unsubscribeUrl?: string;
 }): string {
   const boundary = `----=_Part_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
@@ -90,8 +166,8 @@ function buildRawMessage({
     `Content-Type: multipart/alternative; boundary="${boundary}"`,
   ];
 
-  if (unsubscribeEmail) {
-    headers.push(`List-Unsubscribe: <mailto:${unsubscribeEmail}>`);
+  if (unsubscribeUrl) {
+    headers.push(`List-Unsubscribe: <${unsubscribeUrl}>`);
     headers.push(`List-Unsubscribe-Post: List-Unsubscribe=One-Click`);
   }
 
@@ -119,7 +195,7 @@ export async function sendEmail({
   subject,
   html,
   configSet,
-  unsubscribeEmail,
+  unsubscribeUrl,
 }: {
   from: string;
   fromName?: string;
@@ -127,7 +203,7 @@ export async function sendEmail({
   subject: string;
   html: string;
   configSet: string;
-  unsubscribeEmail?: string;
+  unsubscribeUrl?: string;
 }) {
   const plainText = htmlToPlainText(html);
   const source = formatSourceAddress(from, fromName);
@@ -138,7 +214,7 @@ export async function sendEmail({
     subject,
     html,
     plainText,
-    unsubscribeEmail,
+    unsubscribeUrl,
   });
 
   const cmd = new SendRawEmailCommand({
