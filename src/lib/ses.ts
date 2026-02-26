@@ -1,6 +1,6 @@
 import {
   SESClient,
-  SendEmailCommand,
+  SendRawEmailCommand,
   ListIdentitiesCommand,
   GetIdentityVerificationAttributesCommand,
 } from "@aws-sdk/client-ses";
@@ -62,6 +62,56 @@ function htmlToPlainText(html: string): string {
     .trim();
 }
 
+function buildRawMessage({
+  from,
+  to,
+  subject,
+  html,
+  plainText,
+  unsubscribeEmail,
+}: {
+  from: string;
+  to: string;
+  subject: string;
+  html: string;
+  plainText: string;
+  unsubscribeEmail?: string;
+}): string {
+  const boundary = `----=_Part_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+  // Encode subject for UTF-8 support
+  const encodedSubject = `=?UTF-8?B?${Buffer.from(subject).toString("base64")}?=`;
+
+  let headers = [
+    `From: ${from}`,
+    `To: ${to}`,
+    `Subject: ${encodedSubject}`,
+    `MIME-Version: 1.0`,
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+  ];
+
+  if (unsubscribeEmail) {
+    headers.push(`List-Unsubscribe: <mailto:${unsubscribeEmail}>`);
+    headers.push(`List-Unsubscribe-Post: List-Unsubscribe=One-Click`);
+  }
+
+  const body = [
+    `--${boundary}`,
+    `Content-Type: text/plain; charset=UTF-8`,
+    `Content-Transfer-Encoding: base64`,
+    ``,
+    Buffer.from(plainText).toString("base64"),
+    `--${boundary}`,
+    `Content-Type: text/html; charset=UTF-8`,
+    `Content-Transfer-Encoding: base64`,
+    ``,
+    Buffer.from(html).toString("base64"),
+    `--${boundary}--`,
+  ];
+
+  return [...headers, ``, ...body].join("\r\n");
+}
+
 export async function sendEmail({
   from,
   fromName,
@@ -69,6 +119,7 @@ export async function sendEmail({
   subject,
   html,
   configSet,
+  unsubscribeEmail,
 }: {
   from: string;
   fromName?: string;
@@ -76,18 +127,24 @@ export async function sendEmail({
   subject: string;
   html: string;
   configSet: string;
+  unsubscribeEmail?: string;
 }) {
   const plainText = htmlToPlainText(html);
-  const cmd = new SendEmailCommand({
-    Source: formatSourceAddress(from, fromName),
-    Destination: { ToAddresses: [to] },
-    Message: {
-      Subject: { Data: subject, Charset: "UTF-8" },
-      Body: {
-        Html: { Data: html, Charset: "UTF-8" },
-        Text: { Data: plainText, Charset: "UTF-8" },
-      },
-    },
+  const source = formatSourceAddress(from, fromName);
+
+  const rawMessage = buildRawMessage({
+    from: source,
+    to,
+    subject,
+    html,
+    plainText,
+    unsubscribeEmail,
+  });
+
+  const cmd = new SendRawEmailCommand({
+    RawMessage: { Data: new Uint8Array(Buffer.from(rawMessage)) },
+    Source: source,
+    Destinations: [to],
     ConfigurationSetName: configSet,
   });
   return ses.send(cmd);

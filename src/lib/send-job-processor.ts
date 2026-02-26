@@ -304,6 +304,7 @@ async function processSendJob(
               subject,
               html,
               configSet: context.payload.configSet,
+              unsubscribeEmail: context.payload.unsubscribeEmail,
             });
 
             const messageId = result.MessageId ?? null;
