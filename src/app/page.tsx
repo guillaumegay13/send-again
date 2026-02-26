@@ -95,6 +95,8 @@ interface SetupStatus {
   dkimTokens: string[];
   dkimStatus: "NotStarted" | "Pending" | "Success" | "Failed";
   configSetExists: boolean;
+  spfFound: boolean;
+  dmarcFound: boolean;
 }
 
 type FieldOperator = "equals" | "notEquals" | "contains" | "notContains";
@@ -2612,9 +2614,19 @@ export default function ComposePage() {
                 {/* 2. SPF */}
                 <div className="rounded border border-gray-200 bg-white p-3">
                   <div className="flex items-center gap-2">
-                    <span className="h-4 w-4 shrink-0 rounded border border-gray-300 bg-white" />
+                    {setupStatus?.spfFound ? (
+                      <span className="h-4 w-4 shrink-0 rounded-full bg-green-500 flex items-center justify-center text-white text-[10px]">✓</span>
+                    ) : (
+                      <span className="h-4 w-4 shrink-0 rounded border border-gray-300 bg-white" />
+                    )}
                     <p className="text-sm text-gray-700 font-medium">Add SPF record</p>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-gray-100 text-gray-500">Manual</span>
+                    {setupStatus && (
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                        setupStatus.spfFound ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
+                      }`}>
+                        {setupStatus.spfFound ? "Found" : "Not found"}
+                      </span>
+                    )}
                   </div>
                   <div className="mt-2 rounded bg-gray-50 p-2">
                     <p className="text-[11px] text-gray-500 mb-1">Add this TXT record on <code className="bg-gray-200 px-1 rounded text-[11px]">{workspace.id}</code>:</p>
@@ -2693,9 +2705,19 @@ export default function ComposePage() {
                 {/* 4. DMARC */}
                 <div className="rounded border border-gray-200 bg-white p-3">
                   <div className="flex items-center gap-2">
-                    <span className="h-4 w-4 shrink-0 rounded border border-gray-300 bg-white" />
+                    {setupStatus?.dmarcFound ? (
+                      <span className="h-4 w-4 shrink-0 rounded-full bg-green-500 flex items-center justify-center text-white text-[10px]">✓</span>
+                    ) : (
+                      <span className="h-4 w-4 shrink-0 rounded border border-gray-300 bg-white" />
+                    )}
                     <p className="text-sm text-gray-700 font-medium">Add DMARC record</p>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-gray-100 text-gray-500">Manual</span>
+                    {setupStatus && (
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                        setupStatus.dmarcFound ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
+                      }`}>
+                        {setupStatus.dmarcFound ? "Found" : "Not found"}
+                      </span>
+                    )}
                   </div>
                   <div className="mt-2 rounded bg-gray-50 p-2">
                     <p className="text-[11px] text-gray-500 mb-1">Add this TXT record at <code className="bg-gray-200 px-1 rounded text-[11px]">_dmarc.{workspace.id}</code>:</p>
@@ -2714,21 +2736,7 @@ export default function ComposePage() {
                   </div>
                 </div>
 
-                {/* 5. Unsubscribe mailbox */}
-                <div className="rounded border border-gray-200 bg-white p-3">
-                  <div className="flex items-center gap-2">
-                    <span className="h-4 w-4 shrink-0 rounded border border-gray-300 bg-white" />
-                    <p className="text-sm text-gray-700 font-medium">Create unsubscribe mailbox</p>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-gray-100 text-gray-500">Manual</span>
-                  </div>
-                  <p className="mt-1 ml-6 text-xs text-gray-500">
-                    Create{" "}
-                    <code className="bg-gray-200 px-1 rounded text-[11px]">unsubscribe@{workspace.id}</code>{" "}
-                    (or an alias) so List-Unsubscribe replies don&apos;t bounce.
-                  </p>
-                </div>
-
-                {/* 6. Configuration set */}
+                {/* 5. Configuration set */}
                 <div className="rounded border border-gray-200 bg-white p-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">

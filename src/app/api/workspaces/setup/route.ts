@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { promises as dns } from "dns";
 import {
   verifyDomain,
   getDomainSetupStatus,
@@ -7,6 +8,27 @@ import {
   configurationSetExists,
 } from "@/lib/ses";
 import { requireAuthenticatedUser, apiErrorResponse } from "@/lib/auth";
+
+async function checkSpf(domain: string): Promise<boolean> {
+  try {
+    const records = await dns.resolveTxt(domain);
+    return records.some((chunks) => {
+      const txt = chunks.join("");
+      return txt.startsWith("v=spf1") && txt.includes("amazonses.com");
+    });
+  } catch {
+    return false;
+  }
+}
+
+async function checkDmarc(domain: string): Promise<boolean> {
+  try {
+    const records = await dns.resolveTxt(`_dmarc.${domain}`);
+    return records.some((chunks) => chunks.join("").startsWith("v=DMARC1"));
+  } catch {
+    return false;
+  }
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -22,9 +44,11 @@ export async function GET(req: NextRequest) {
 
     const configSetName = req.nextUrl.searchParams.get("configSet") ?? "";
 
-    const [status, configSetExists_] = await Promise.all([
+    const [status, configSetExists_, spfFound, dmarcFound] = await Promise.all([
       getDomainSetupStatus(domain),
       configSetName ? configurationSetExists(configSetName) : Promise.resolve(false),
+      checkSpf(domain),
+      checkDmarc(domain),
     ]);
 
     return NextResponse.json({
@@ -33,6 +57,8 @@ export async function GET(req: NextRequest) {
       dkimTokens: status.dkimTokens,
       dkimStatus: status.dkimStatus,
       configSetExists: configSetExists_,
+      spfFound,
+      dmarcFound,
     });
   } catch (err) {
     return apiErrorResponse(err, "Failed to get setup status");
