@@ -718,11 +718,30 @@ export interface SendHistoryRow {
   events: string;
 }
 
+export interface SendHistoryPage {
+  rows: SendHistoryRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface TopicDeliveryAnalytics {
+  topic: string;
+  totalSends: number;
+  deliveredSends: number;
+  undeliveredSends: number;
+  deliveryRate: number;
+}
+
 interface SendRow {
   message_id: string;
   recipient: string;
   subject: string | null;
   sent_at: string;
+}
+
+interface SendMessageIdRow {
+  message_id: string;
 }
 
 interface EventRow {
@@ -732,22 +751,93 @@ interface EventRow {
   detail: string | null;
 }
 
+function normalizeHistoryPage(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.max(1, Math.floor(parsed));
+}
+
+function normalizeHistoryPageSize(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 25;
+  return Math.max(1, Math.min(100, Math.floor(parsed)));
+}
+
+function normalizeHistorySearch(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value
+    .trim()
+    .slice(0, 120)
+    .replace(/[^a-zA-Z0-9@._+\-\s]/g, " ")
+    .replace(/\s+/g, " ");
+}
+
 export async function getSendHistory(
   workspaceId: string,
-  limit = 100
-): Promise<SendHistoryRow[]> {
+  options: {
+    page?: number;
+    pageSize?: number;
+    search?: string;
+  } = {}
+): Promise<SendHistoryPage> {
   const db = getDb();
-  const rowLimit = Number.isFinite(limit) ? Math.max(1, Math.floor(limit)) : 100;
-  const { data: sendData, error: sendsError } = await db
+  const pageSize = normalizeHistoryPageSize(options.pageSize);
+  const requestedPage = normalizeHistoryPage(options.page);
+  const search = normalizeHistorySearch(options.search);
+  const searchPattern = search ? `%${search.replace(/\s+/g, "%")}%` : "";
+  const searchFilter = searchPattern
+    ? `recipient.ilike.${searchPattern},subject.ilike.${searchPattern},message_id.ilike.${searchPattern}`
+    : "";
+
+  let countQuery = db
+    .from("sends")
+    .select("message_id", { count: "exact", head: true })
+    .eq("workspace_id", workspaceId);
+
+  if (searchFilter) {
+    countQuery = countQuery.or(searchFilter);
+  }
+
+  const { count, error: countError } = await countQuery;
+  assertNoError(countError, "Failed to count send history");
+
+  const total = Math.max(0, count ?? 0);
+  if (total === 0) {
+    return {
+      rows: [],
+      total: 0,
+      page: 1,
+      pageSize,
+    };
+  }
+
+  const page = Math.min(requestedPage, Math.max(1, Math.ceil(total / pageSize)));
+  const from = (page - 1) * pageSize;
+  const to = from + pageSize - 1;
+
+  let sendsQuery = db
     .from("sends")
     .select("message_id, recipient, subject, sent_at")
-    .eq("workspace_id", workspaceId)
+    .eq("workspace_id", workspaceId);
+
+  if (searchFilter) {
+    sendsQuery = sendsQuery.or(searchFilter);
+  }
+
+  const { data: sendData, error: sendsError } = await sendsQuery
     .order("sent_at", { ascending: false })
-    .limit(rowLimit);
+    .range(from, to);
   assertNoError(sendsError, "Failed to fetch send history");
 
   const sends = (sendData ?? []) as SendRow[];
-  if (sends.length === 0) return [];
+  if (sends.length === 0) {
+    return {
+      rows: [],
+      total,
+      page,
+      pageSize,
+    };
+  }
 
   const messageIds = sends.map((send) => send.message_id);
   const { data: eventData, error: eventsError } = await db
@@ -773,13 +863,113 @@ export async function getSendHistory(
     eventsByMessageId.set(row.message_id, list);
   }
 
-  return sends.map((send) => ({
-    message_id: send.message_id,
-    recipient: send.recipient,
-    subject: send.subject ?? "",
-    sent_at: send.sent_at,
-    events: JSON.stringify(eventsByMessageId.get(send.message_id) ?? []),
-  }));
+  return {
+    rows: sends.map((send) => ({
+      message_id: send.message_id,
+      recipient: send.recipient,
+      subject: send.subject ?? "",
+      sent_at: send.sent_at,
+      events: JSON.stringify(eventsByMessageId.get(send.message_id) ?? []),
+    })),
+    total,
+    page,
+    pageSize,
+  };
+}
+
+export async function getTopicDeliveryAnalytics(
+  workspaceId: string,
+  topic: string
+): Promise<TopicDeliveryAnalytics> {
+  const db = getDb();
+  const normalizedTopic = normalizeHistorySearch(topic);
+  if (!normalizedTopic) {
+    return {
+      topic: "",
+      totalSends: 0,
+      deliveredSends: 0,
+      undeliveredSends: 0,
+      deliveryRate: 0,
+    };
+  }
+
+  const pageSize = 1000;
+  const topicPattern = `%${normalizedTopic.replace(/\s+/g, "%")}%`;
+  const messageIds: string[] = [];
+
+  const { data: firstPageData, error, count } = await db
+    .from("sends")
+    .select("message_id", { count: "exact" })
+    .eq("workspace_id", workspaceId)
+    .ilike("subject", topicPattern)
+    .order("sent_at", { ascending: false })
+    .range(0, pageSize - 1);
+  assertNoError(error, "Failed to fetch sends for topic analytics");
+
+  const firstPage = (firstPageData ?? []) as SendMessageIdRow[];
+  messageIds.push(...firstPage.map((row) => row.message_id));
+
+  const totalRows = Math.max(count ?? messageIds.length, messageIds.length);
+  let from = messageIds.length;
+  while (from < totalRows) {
+    const { data: pageData, error: pageError } = await db
+      .from("sends")
+      .select("message_id")
+      .eq("workspace_id", workspaceId)
+      .ilike("subject", topicPattern)
+      .order("sent_at", { ascending: false })
+      .range(from, from + pageSize - 1);
+    assertNoError(pageError, "Failed to fetch sends for topic analytics");
+
+    const page = (pageData ?? []) as SendMessageIdRow[];
+    if (page.length === 0) break;
+
+    messageIds.push(...page.map((row) => row.message_id));
+    from += page.length;
+  }
+
+  const uniqueMessageIds = Array.from(
+    new Set(messageIds.map((value) => value.trim()).filter(Boolean))
+  );
+
+  if (uniqueMessageIds.length === 0) {
+    return {
+      topic: normalizedTopic,
+      totalSends: 0,
+      deliveredSends: 0,
+      undeliveredSends: 0,
+      deliveryRate: 0,
+    };
+  }
+
+  const deliveredMessageIds = new Set<string>();
+  const eventIdChunks = chunkArray(uniqueMessageIds, 1000);
+  for (const ids of eventIdChunks) {
+    if (ids.length === 0) continue;
+    const { data: eventsData, error: eventsError } = await db
+      .from("email_events")
+      .select("message_id")
+      .in("message_id", ids)
+      .ilike("event_type", "delivery");
+    assertNoError(eventsError, "Failed to fetch delivery events for topic analytics");
+
+    for (const row of (eventsData ?? []) as SendMessageIdRow[]) {
+      if (!row.message_id) continue;
+      deliveredMessageIds.add(row.message_id);
+    }
+  }
+
+  const totalSends = uniqueMessageIds.length;
+  const deliveredSends = deliveredMessageIds.size;
+  const undeliveredSends = Math.max(0, totalSends - deliveredSends);
+
+  return {
+    topic: normalizedTopic,
+    totalSends,
+    deliveredSends,
+    undeliveredSends,
+    deliveryRate: totalSends > 0 ? deliveredSends / totalSends : 0,
+  };
 }
 
 export type SendJobStatus =

@@ -30,6 +30,16 @@ async function checkDmarc(domain: string): Promise<boolean> {
   }
 }
 
+async function checkUnsubscribePage(websiteUrl: string): Promise<boolean> {
+  try {
+    const url = new URL("/unsubscribe", websiteUrl).toString();
+    const res = await fetch(url, { method: "HEAD", redirect: "follow", signal: AbortSignal.timeout(5000) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function GET(req: NextRequest) {
   try {
     await requireAuthenticatedUser(req);
@@ -43,12 +53,14 @@ export async function GET(req: NextRequest) {
     }
 
     const configSetName = req.nextUrl.searchParams.get("configSet") ?? "";
+    const websiteUrl = req.nextUrl.searchParams.get("websiteUrl") ?? "";
 
-    const [status, configSetExists_, spfFound, dmarcFound] = await Promise.all([
+    const [status, configSetExists_, spfFound, dmarcFound, unsubscribePageFound] = await Promise.all([
       getDomainSetupStatus(domain),
       configSetName ? configurationSetExists(configSetName) : Promise.resolve(false),
       checkSpf(domain),
       checkDmarc(domain),
+      websiteUrl ? checkUnsubscribePage(websiteUrl) : checkUnsubscribePage(`https://${domain}`),
     ]);
 
     return NextResponse.json({
@@ -59,6 +71,7 @@ export async function GET(req: NextRequest) {
       configSetExists: configSetExists_,
       spfFound,
       dmarcFound,
+      unsubscribePageFound,
     });
   } catch (err) {
     return apiErrorResponse(err, "Failed to get setup status");

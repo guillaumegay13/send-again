@@ -48,6 +48,25 @@ interface HistoryItem {
   events: EmailEvent[];
 }
 
+interface HistoryListResponse {
+  items: HistoryItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+}
+
+interface TopicDeliveryAnalytics {
+  topic: string;
+  totalSends: number;
+  deliveredSends: number;
+  undeliveredSends: number;
+  deliveryRate: number;
+}
+
+const HISTORY_RULES_PAGE_SIZE = 100;
+const HISTORY_TABLE_PAGE_SIZE = 25;
+
 interface SendJobStatusResponse {
   id: string;
   workspaceId: string;
@@ -97,6 +116,7 @@ interface SetupStatus {
   configSetExists: boolean;
   spfFound: boolean;
   dmarcFound: boolean;
+  unsubscribePageFound: boolean;
 }
 
 type FieldOperator = "equals" | "notEquals" | "contains" | "notContains";
@@ -343,8 +363,71 @@ function formatTimestamp(value: string): string {
   return date.toLocaleString();
 }
 
+type HistoryEventMeta = {
+  label: string;
+  className: string;
+  priority: number;
+};
+
+const HISTORY_EVENT_META: Record<string, HistoryEventMeta> = {
+  Reject: {
+    label: "Rejected",
+    className: "bg-red-100 text-red-700",
+    priority: 0,
+  },
+  Bounce: {
+    label: "Bounced",
+    className: "bg-red-100 text-red-700",
+    priority: 1,
+  },
+  Complaint: {
+    label: "Spam complaint",
+    className: "bg-orange-100 text-orange-700",
+    priority: 2,
+  },
+  DeliveryDelay: {
+    label: "Delayed",
+    className: "bg-amber-100 text-amber-700",
+    priority: 3,
+  },
+  RenderingFailure: {
+    label: "Rendering failed",
+    className: "bg-yellow-100 text-yellow-800",
+    priority: 4,
+  },
+  Delivery: {
+    label: "Delivered",
+    className: "bg-green-100 text-green-700",
+    priority: 5,
+  },
+  Open: {
+    label: "Opened",
+    className: "bg-blue-100 text-blue-700",
+    priority: 6,
+  },
+  Click: {
+    label: "Clicked",
+    className: "bg-purple-100 text-purple-700",
+    priority: 7,
+  },
+  Subscription: {
+    label: "Subscription",
+    className: "bg-cyan-100 text-cyan-700",
+    priority: 8,
+  },
+  Send: {
+    label: "Sent",
+    className: "bg-gray-100 text-gray-600",
+    priority: 9,
+  },
+};
+
+function normalizeEventTypeKey(eventType: string): string {
+  return eventType.trim().toLowerCase().replace(/[\s_-]+/g, "");
+}
+
 function normalizeEventType(eventType: string): string {
-  switch (eventType.trim().toLowerCase()) {
+  switch (normalizeEventTypeKey(eventType)) {
     case "send":
       return "Send";
     case "delivery":
@@ -357,9 +440,53 @@ function normalizeEventType(eventType: string): string {
       return "Bounce";
     case "complaint":
       return "Complaint";
+    case "reject":
+      return "Reject";
+    case "deliverydelay":
+      return "DeliveryDelay";
+    case "renderingfailure":
+      return "RenderingFailure";
+    case "subscription":
+      return "Subscription";
     default:
-      return eventType;
+      return eventType.trim();
   }
+}
+
+function getHistoryEventsForDisplay(events: EmailEvent[]): EmailEvent[] {
+  const latestByType = new Map<string, EmailEvent>();
+
+  for (const event of events) {
+    const type = normalizeEventType(event.type);
+    if (!type) continue;
+    latestByType.set(type, { ...event, type });
+  }
+
+  let deduped = Array.from(latestByType.values());
+  if (deduped.length > 1) {
+    deduped = deduped.filter((event) => event.type !== "Send");
+  }
+
+  deduped.sort((a, b) => {
+    const priorityA = HISTORY_EVENT_META[a.type]?.priority ?? 99;
+    const priorityB = HISTORY_EVENT_META[b.type]?.priority ?? 99;
+    if (priorityA !== priorityB) return priorityA - priorityB;
+    return a.type.localeCompare(b.type);
+  });
+
+  return deduped;
+}
+
+function formatHistoryEventTooltip(event: EmailEvent): string {
+  const label = HISTORY_EVENT_META[event.type]?.label ?? event.type;
+  const parts = [label];
+  const detail = event.detail.trim();
+  const timestamp = formatTimestamp(event.timestamp);
+
+  if (timestamp !== "Invalid Date") parts.push(timestamp);
+  if (detail) parts.push(detail);
+
+  return parts.join(" · ");
 }
 
 function hasClosingQuoteForField(
@@ -526,6 +653,20 @@ export default function ComposePage() {
 
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyRows, setHistoryRows] = useState<HistoryItem[]>([]);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyPageSize, setHistoryPageSize] = useState(HISTORY_TABLE_PAGE_SIZE);
+  const [historySearch, setHistorySearch] = useState("");
+  const [historySearchInput, setHistorySearchInput] = useState("");
+  const [historyReloadKey, setHistoryReloadKey] = useState(0);
+  const [topicAnalyticsInput, setTopicAnalyticsInput] = useState("");
+  const [topicAnalyticsLoading, setTopicAnalyticsLoading] = useState(false);
+  const [topicAnalyticsError, setTopicAnalyticsError] = useState<string | null>(
+    null
+  );
+  const [topicAnalytics, setTopicAnalytics] =
+    useState<TopicDeliveryAnalytics | null>(null);
   const [recipientConditions, setRecipientConditions] = useState<
     RecipientCondition[]
   >([]);
@@ -773,6 +914,17 @@ export default function ComposePage() {
       setActiveId(null);
       setContactsMap({});
       setHistory([]);
+      setHistoryRows([]);
+      setHistoryTotal(0);
+      setHistoryPage(1);
+      setHistoryPageSize(HISTORY_TABLE_PAGE_SIZE);
+      setHistorySearch("");
+      setHistorySearchInput("");
+      setTopicAnalyticsInput("");
+      setTopicAnalyticsLoading(false);
+      setTopicAnalyticsError(null);
+      setTopicAnalytics(null);
+      setHistoryLoading(false);
       return;
     }
 
@@ -816,6 +968,19 @@ export default function ComposePage() {
   }, [activeId, clearSettingsSavedResetTimer]);
 
   useEffect(() => {
+    setHistoryRows([]);
+    setHistoryTotal(0);
+    setHistoryPage(1);
+    setHistoryPageSize(HISTORY_TABLE_PAGE_SIZE);
+    setHistorySearch("");
+    setHistorySearchInput("");
+    setTopicAnalyticsInput("");
+    setTopicAnalyticsLoading(false);
+    setTopicAnalyticsError(null);
+    setTopicAnalytics(null);
+  }, [activeId]);
+
+  useEffect(() => {
     if (!sessionToken || !activeId) return;
     // Skip if we already have contacts loaded for this workspace
     if (contactsMap[activeId] !== undefined) return;
@@ -832,14 +997,61 @@ export default function ComposePage() {
   }, [activeId, stopSendPolling]);
 
   useEffect(() => {
-    if (!sessionToken) return;
-    if (!activeId) return;
-    setHistoryLoading(true);
-    fetchJson<HistoryItem[]>(`/api/history?workspace=${encodeURIComponent(activeId)}`)
-      .then((data) => setHistory(data))
-      .catch(console.error)
-      .finally(() => setHistoryLoading(false));
+    if (!sessionToken || !activeId) return;
+    const params = new URLSearchParams({
+      workspace: activeId,
+      page: "1",
+      pageSize: String(HISTORY_RULES_PAGE_SIZE),
+    });
+    fetchJson<HistoryListResponse>(`/api/history?${params.toString()}`)
+      .then((data) => setHistory(data.items))
+      .catch(console.error);
   }, [sessionToken, activeId, fetchJson]);
+
+  useEffect(() => {
+    if (!sessionToken || !activeId || tab !== "history") return;
+    let cancelled = false;
+
+    const params = new URLSearchParams({
+      workspace: activeId,
+      page: String(historyPage),
+      pageSize: String(HISTORY_TABLE_PAGE_SIZE),
+    });
+    const searchTerm = historySearch.trim();
+    if (searchTerm) {
+      params.set("search", searchTerm);
+    }
+
+    setHistoryLoading(true);
+    fetchJson<HistoryListResponse>(`/api/history?${params.toString()}`)
+      .then((data) => {
+        if (cancelled) return;
+        setHistoryRows(data.items);
+        setHistoryTotal(data.total);
+        setHistoryPageSize(data.pageSize);
+        if (data.page !== historyPage) {
+          setHistoryPage(data.page);
+        }
+      })
+      .catch(console.error)
+      .finally(() => {
+        if (!cancelled) {
+          setHistoryLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    sessionToken,
+    activeId,
+    tab,
+    historyPage,
+    historySearch,
+    historyReloadKey,
+    fetchJson,
+  ]);
 
   useEffect(() => {
     if (!sessionToken || !activeId) return;
@@ -915,7 +1127,7 @@ export default function ComposePage() {
     setSetupLoading(true);
     try {
       const data = await fetchJson<SetupStatus>(
-        `/api/workspaces/setup?domain=${encodeURIComponent(workspace.id)}&configSet=${encodeURIComponent(workspace.configSet)}`
+        `/api/workspaces/setup?domain=${encodeURIComponent(workspace.id)}&configSet=${encodeURIComponent(workspace.configSet)}&websiteUrl=${encodeURIComponent(workspace.websiteUrl || "")}`
       );
       setSetupStatus(data);
     } catch (e) {
@@ -1025,6 +1237,17 @@ export default function ComposePage() {
     setActiveId(null);
     setContactsMap({});
     setHistory([]);
+    setHistoryRows([]);
+    setHistoryTotal(0);
+    setHistoryPage(1);
+    setHistoryPageSize(HISTORY_TABLE_PAGE_SIZE);
+    setHistorySearch("");
+    setHistorySearchInput("");
+    setTopicAnalyticsInput("");
+    setTopicAnalyticsLoading(false);
+    setTopicAnalyticsError(null);
+    setTopicAnalytics(null);
+    setHistoryLoading(false);
     setWorkspaceMessage(null);
     setNewWorkspaceId("");
     setBodyVibeStatus(null);
@@ -1357,6 +1580,69 @@ export default function ComposePage() {
     conditionMatchMode,
     historyEventIndex,
   ]);
+
+  const historyTotalPages = Math.max(
+    1,
+    Math.ceil(historyTotal / Math.max(1, historyPageSize))
+  );
+  const historyRangeStart =
+    historyTotal > 0 ? (historyPage - 1) * historyPageSize + 1 : 0;
+  const historyRangeEnd =
+    historyTotal > 0 && historyRows.length > 0
+      ? historyRangeStart + historyRows.length - 1
+      : 0;
+
+  function refreshHistoryPage() {
+    setHistoryReloadKey((prev) => prev + 1);
+  }
+
+  function submitHistorySearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setHistoryPage(1);
+    setHistorySearch(historySearchInput.trim());
+    refreshHistoryPage();
+  }
+
+  function clearHistorySearch() {
+    setHistorySearchInput("");
+    setHistorySearch("");
+    setHistoryPage(1);
+    refreshHistoryPage();
+  }
+
+  function formatPercent(value: number): string {
+    return `${(Math.max(0, Math.min(1, value)) * 100).toFixed(1)}%`;
+  }
+
+  function submitTopicAnalytics(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!activeId) return;
+
+    const topic = topicAnalyticsInput.trim();
+    if (!topic) {
+      setTopicAnalytics(null);
+      setTopicAnalyticsError("Enter a topic to analyze.");
+      return;
+    }
+
+    const params = new URLSearchParams({
+      workspace: activeId,
+      topic,
+    });
+
+    setTopicAnalyticsLoading(true);
+    setTopicAnalyticsError(null);
+    fetchJson<TopicDeliveryAnalytics>(
+      `/api/history/analytics?${params.toString()}`
+    )
+      .then((data) => setTopicAnalytics(data))
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        setTopicAnalytics(null);
+        setTopicAnalyticsError(message);
+      })
+      .finally(() => setTopicAnalyticsLoading(false));
+  }
 
   function addFieldCondition() {
     setRecipientConditions((prev) => [...prev, makeFieldCondition(availableFieldKeys[0] ?? "verified")]);
@@ -2399,117 +2685,215 @@ export default function ComposePage() {
 
         {tab === "history" && (
           <div className="flex-1 p-6 overflow-y-auto">
-            <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center justify-between gap-3 mb-1">
               <h1 className="text-xl font-semibold">Send History</h1>
               <button
-                onClick={() => {
-                  if (!activeId) return;
-                  setHistoryLoading(true);
-                  fetchJson<HistoryItem[]>(
-                    `/api/history?workspace=${encodeURIComponent(activeId)}`
-                  )
-                    .then((data) => setHistory(data))
-                    .catch(console.error)
-                    .finally(() => setHistoryLoading(false));
-                }}
+                onClick={refreshHistoryPage}
+                disabled={historyLoading || !activeId}
                 className="text-xs text-black hover:underline"
               >
-                Refresh
+                {historyLoading ? "Refreshing..." : "Refresh"}
               </button>
             </div>
             <p className="text-xs text-gray-400 mb-4">{workspace.name}</p>
+            <form
+              onSubmit={submitTopicAnalytics}
+              className="mb-4 rounded border border-gray-200 bg-gray-50 p-3"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <label
+                  htmlFor="topic-analytics"
+                  className="text-xs font-semibold uppercase tracking-wide text-gray-500"
+                >
+                  Topic delivery rate
+                </label>
+                <input
+                  id="topic-analytics"
+                  type="text"
+                  value={topicAnalyticsInput}
+                  onChange={(event) => {
+                    setTopicAnalyticsInput(event.target.value);
+                    if (topicAnalyticsError) {
+                      setTopicAnalyticsError(null);
+                    }
+                  }}
+                  placeholder="e.g. onboarding, launch, follow-up"
+                  className="w-full max-w-md rounded border border-gray-300 bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
+                />
+                <button
+                  type="submit"
+                  disabled={topicAnalyticsLoading || !activeId}
+                  className="rounded border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {topicAnalyticsLoading ? "Calculating..." : "Calculate"}
+                </button>
+              </div>
+              {topicAnalyticsError && (
+                <p className="mt-2 text-xs text-red-600">{topicAnalyticsError}</p>
+              )}
+              {topicAnalytics && !topicAnalyticsError && (
+                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-600">
+                  <p>
+                    Delivery rate:{" "}
+                    <span className="font-semibold text-gray-900">
+                      {formatPercent(topicAnalytics.deliveryRate)}
+                    </span>
+                  </p>
+                  <p>
+                    Delivered {topicAnalytics.deliveredSends} /{" "}
+                    {topicAnalytics.totalSends}
+                  </p>
+                  <p>Undelivered {topicAnalytics.undeliveredSends}</p>
+                  {topicAnalytics.topic && (
+                    <p className="text-gray-500">
+                      Topic: <span className="font-medium text-gray-700">{topicAnalytics.topic}</span>
+                    </p>
+                  )}
+                </div>
+              )}
+            </form>
+            <form onSubmit={submitHistorySearch} className="mb-4 flex flex-wrap items-center gap-2">
+              <input
+                type="search"
+                value={historySearchInput}
+                onChange={(event) => setHistorySearchInput(event.target.value)}
+                placeholder="Search recipient, subject, or message ID"
+                className="w-full max-w-md rounded border border-gray-300 bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
+              />
+              <button
+                type="submit"
+                className="rounded border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-100"
+              >
+                Search
+              </button>
+              {(historySearch || historySearchInput) && (
+                <button
+                  type="button"
+                  onClick={clearHistorySearch}
+                  className="rounded border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-500 hover:bg-gray-100"
+                >
+                  Clear
+                </button>
+              )}
+            </form>
 
             {historyLoading ? (
               <p className="text-sm text-gray-400">Loading...</p>
-            ) : history.length === 0 ? (
+            ) : historyRows.length === 0 ? (
               <p className="text-sm text-gray-400">
-                No emails sent yet from this workspace.
+                {historySearch
+                  ? "No history results match your search."
+                  : "No emails sent yet from this workspace."}
               </p>
             ) : (
-              <div className="border border-gray-200 rounded overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="bg-gray-50 border-b border-gray-200">
-                      <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Recipient
-                      </th>
-                      <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Subject
-                      </th>
-                      <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider w-40">
-                        Sent
-                      </th>
-                      <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Status
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {history.map((item) => {
-                      const eventTypes = new Set(
-                        item.events.map((e) => normalizeEventType(e.type))
-                      );
-                      return (
-                        <tr
-                          key={item.messageId}
-                          className="border-b border-gray-100 last:border-0 hover:bg-gray-50"
-                        >
-                          <td className="px-3 py-2 font-mono text-sm">
-                            {item.recipient}
-                          </td>
-                          <td className="px-3 py-2 text-sm truncate max-w-xs">
-                            {item.subject}
-                          </td>
-                          <td className="px-3 py-2 text-sm text-gray-500 whitespace-nowrap">
-                            {formatTimestamp(item.sentAt)}
-                          </td>
-                          <td className="px-3 py-2">
-                            <div className="flex flex-wrap gap-1">
-                              {eventTypes.has("Delivery") && (
-                                <span className="inline-block px-1.5 py-0.5 text-xs rounded bg-green-100 text-green-700">
-                                  Delivered
-                                </span>
-                              )}
-                              {eventTypes.has("Open") && (
-                                <span className="inline-block px-1.5 py-0.5 text-xs rounded bg-blue-100 text-blue-700">
-                                  Opened
-                                </span>
-                              )}
-                              {eventTypes.has("Click") && (
-                                <span className="inline-block px-1.5 py-0.5 text-xs rounded bg-purple-100 text-purple-700">
-                                  Clicked
-                                </span>
-                              )}
-                              {eventTypes.has("Bounce") && (
-                                <span className="inline-block px-1.5 py-0.5 text-xs rounded bg-red-100 text-red-700">
-                                  Bounced
-                                </span>
-                              )}
-                              {eventTypes.has("Complaint") && (
-                                <span className="inline-block px-1.5 py-0.5 text-xs rounded bg-orange-100 text-orange-700">
-                                  Complaint
-                                </span>
-                              )}
-                              {eventTypes.has("Send") &&
-                                !eventTypes.has("Delivery") &&
-                                !eventTypes.has("Bounce") && (
-                                  <span className="inline-block px-1.5 py-0.5 text-xs rounded bg-gray-100 text-gray-600">
-                                    Sent
+              <>
+                <div className="border border-gray-200 rounded overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-gray-50 border-b border-gray-200">
+                        <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Recipient
+                        </th>
+                        <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Subject
+                        </th>
+                        <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider w-40">
+                          Sent
+                        </th>
+                        <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Status
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {historyRows.map((item) => {
+                        const visibleEvents = getHistoryEventsForDisplay(item.events);
+                        return (
+                          <tr
+                            key={item.messageId}
+                            className="border-b border-gray-100 last:border-0 hover:bg-gray-50"
+                          >
+                            <td className="px-3 py-2 font-mono text-sm">
+                              {item.recipient}
+                            </td>
+                            <td className="px-3 py-2 text-sm truncate max-w-xs">
+                              {item.subject}
+                            </td>
+                            <td className="px-3 py-2 text-sm text-gray-500 whitespace-nowrap">
+                              {formatTimestamp(item.sentAt)}
+                            </td>
+                            <td className="px-3 py-2">
+                              <div className="flex flex-wrap gap-1">
+                                {visibleEvents.map((event) => {
+                                  const meta = HISTORY_EVENT_META[event.type];
+                                  return (
+                                    <span
+                                      key={`${item.messageId}-${event.type}`}
+                                      title={formatHistoryEventTooltip(event)}
+                                      className={`inline-block px-1.5 py-0.5 text-xs rounded ${
+                                        meta?.className ?? "bg-gray-100 text-gray-600"
+                                      }`}
+                                    >
+                                      {meta?.label ?? event.type}
+                                    </span>
+                                  );
+                                })}
+                                {visibleEvents.length === 0 && (
+                                  <span className="inline-block px-1.5 py-0.5 text-xs rounded bg-gray-100 text-gray-400">
+                                    Pending
                                   </span>
                                 )}
-                              {item.events.length === 0 && (
-                                <span className="inline-block px-1.5 py-0.5 text-xs rounded bg-gray-100 text-gray-400">
-                                  Pending
-                                </span>
+                              </div>
+                              {visibleEvents.some((event) => event.detail.trim().length > 0) && (
+                                <p className="mt-1 text-[11px] text-gray-500 leading-snug">
+                                  {visibleEvents
+                                    .filter((event) => event.detail.trim().length > 0)
+                                    .map((event) => {
+                                      const label = HISTORY_EVENT_META[event.type]?.label ?? event.type;
+                                      return `${label}: ${event.detail.trim()}`;
+                                    })
+                                    .join(" · ")}
+                                </p>
                               )}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500">
+                  <p>
+                    Showing {historyRangeStart}-{historyRangeEnd} of {historyTotal}
+                    {historySearch ? ` results for "${historySearch}"` : ""}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setHistoryPage((prev) => Math.max(1, prev - 1))}
+                      disabled={historyLoading || historyPage <= 1}
+                      className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Previous
+                    </button>
+                    <span>
+                      Page {historyPage} of {historyTotalPages}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setHistoryPage((prev) =>
+                          Math.min(historyTotalPages, prev + 1)
+                        )
+                      }
+                      disabled={historyLoading || historyPage >= historyTotalPages}
+                      className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              </>
             )}
           </div>
         )}
@@ -2767,6 +3151,28 @@ export default function ComposePage() {
                   </div>
                   <p className="mt-1 ml-6 text-xs text-gray-500">
                     Configuration set <code className="bg-gray-200 px-1 rounded text-[11px]">{workspace.configSet}</code> for tracking bounces and complaints.
+                  </p>
+                </div>
+
+                {/* 6. Unsubscribe page */}
+                <div className="rounded border border-gray-200 bg-white p-3">
+                  <div className="flex items-center gap-2">
+                    {setupStatus?.unsubscribePageFound ? (
+                      <span className="h-4 w-4 shrink-0 rounded-full bg-green-500 flex items-center justify-center text-white text-[10px]">✓</span>
+                    ) : (
+                      <span className="h-4 w-4 shrink-0 rounded border border-gray-300 bg-white" />
+                    )}
+                    <p className="text-sm text-gray-700 font-medium">Unsubscribe page</p>
+                    {setupStatus && (
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                        setupStatus.unsubscribePageFound ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
+                      }`}>
+                        {setupStatus.unsubscribePageFound ? "Reachable" : "Not found"}
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1 ml-6 text-xs text-gray-500">
+                    A page at <code className="bg-gray-200 px-1 rounded text-[11px]">{workspace.websiteUrl || `https://${workspace.id}`}/unsubscribe</code> where users land after unsubscribing.
                   </p>
                 </div>
 

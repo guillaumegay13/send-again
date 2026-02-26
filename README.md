@@ -98,11 +98,13 @@ Production recommendation:
 
 ### SNS Webhook (for event tracking)
 
-To receive delivery/open/click/bounce events:
+To receive delivery/open/click/bounce/complaint/reject events:
 
 1. Create an SNS topic in your AWS console
 2. Configure your SES Configuration Set to publish events to that topic
 3. Add an HTTPS subscription pointing to `https://your-domain/api/webhooks/sns`
+
+Note: SES "Delivery" means the recipient mailbox provider accepted the message. Inbox vs spam-folder placement is not exposed as a dedicated SNS event.
 
 ## Development
 

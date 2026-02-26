@@ -118,11 +118,41 @@ export const openapiSpec = {
             items: {
               type: "object",
               properties: {
-                type: { type: "string", enum: ["Send", "Delivery", "Open", "Click", "Bounce", "Complaint"] },
+                type: {
+                  type: "string",
+                  description:
+                    "SES event type (for example: Send, Delivery, Open, Click, Bounce, Complaint, Reject, DeliveryDelay, RenderingFailure, Subscription).",
+                },
                 timestamp: { type: "string", format: "date-time" },
                 detail: { type: "string" },
               },
             },
+          },
+        },
+      },
+      HistoryListResponse: {
+        type: "object",
+        properties: {
+          items: {
+            type: "array",
+            items: { $ref: "#/components/schemas/HistoryEntry" },
+          },
+          total: { type: "integer" },
+          page: { type: "integer" },
+          pageSize: { type: "integer" },
+          hasMore: { type: "boolean" },
+        },
+      },
+      TopicDeliveryAnalytics: {
+        type: "object",
+        properties: {
+          topic: { type: "string" },
+          totalSends: { type: "integer" },
+          deliveredSends: { type: "integer" },
+          undeliveredSends: { type: "integer" },
+          deliveryRate: {
+            type: "number",
+            description: "Delivered / total sends, from 0 to 1.",
           },
         },
       },
@@ -565,16 +595,37 @@ export const openapiSpec = {
     "/api/history": {
       get: {
         operationId: "getHistory",
-        summary: "Get email send history for a workspace (last 100)",
+        summary: "Get paginated email send history for a workspace",
         tags: ["History"],
         security: [{ jwt: [] }],
         parameters: [
           { name: "workspace", in: "query" as const, required: true, schema: { type: "string" } },
+          { name: "page", in: "query" as const, required: false, schema: { type: "integer", minimum: 1, default: 1 } },
+          { name: "pageSize", in: "query" as const, required: false, schema: { type: "integer", minimum: 1, maximum: 100, default: 25 } },
+          { name: "search", in: "query" as const, required: false, schema: { type: "string" } },
         ],
         responses: {
           "200": {
-            description: "Send history entries, newest first",
-            content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/HistoryEntry" } } } },
+            description: "Paginated send history entries, newest first",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/HistoryListResponse" } } },
+          },
+        },
+      },
+    },
+    "/api/history/analytics": {
+      get: {
+        operationId: "getHistoryTopicDeliveryAnalytics",
+        summary: "Get delivery rate analytics for a subject/topic",
+        tags: ["History"],
+        security: [{ jwt: [] }],
+        parameters: [
+          { name: "workspace", in: "query" as const, required: true, schema: { type: "string" } },
+          { name: "topic", in: "query" as const, required: true, schema: { type: "string" } },
+        ],
+        responses: {
+          "200": {
+            description: "Topic delivery analytics",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/TopicDeliveryAnalytics" } } },
           },
         },
       },

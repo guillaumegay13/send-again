@@ -10,8 +10,25 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+const EVENT_PAYLOAD_KEY: Record<string, string> = {
+  Send: "send",
+  Delivery: "delivery",
+  Open: "open",
+  Click: "click",
+  Bounce: "bounce",
+  Complaint: "complaint",
+  Reject: "reject",
+  DeliveryDelay: "deliveryDelay",
+  RenderingFailure: "failure",
+  Subscription: "subscription",
+};
+
+function normalizeEventTypeKey(eventType: string): string {
+  return eventType.trim().toLowerCase().replace(/[\s_-]+/g, "");
+}
+
 function normalizeEventType(eventType: string): string {
-  switch (eventType.trim().toLowerCase()) {
+  switch (normalizeEventTypeKey(eventType)) {
     case "send":
       return "Send";
     case "delivery":
@@ -24,9 +41,25 @@ function normalizeEventType(eventType: string): string {
       return "Bounce";
     case "complaint":
       return "Complaint";
+    case "reject":
+      return "Reject";
+    case "deliverydelay":
+      return "DeliveryDelay";
+    case "renderingfailure":
+      return "RenderingFailure";
+    case "subscription":
+      return "Subscription";
     default:
-      return eventType;
+      return eventType.trim();
   }
+}
+
+function getEventPayload(
+  message: Record<string, unknown>,
+  eventType: string
+): Record<string, unknown> | undefined {
+  const payloadKey = EVENT_PAYLOAD_KEY[eventType] ?? eventType;
+  return asRecord(message[payloadKey]) ?? asRecord(message[payloadKey.toLowerCase()]);
 }
 
 function getEventTimestamp(
@@ -34,7 +67,7 @@ function getEventTimestamp(
   eventType: string,
   fallbackTimestamp: string | undefined
 ): string {
-  const eventPayload = asRecord(message[eventType.toLowerCase()]);
+  const eventPayload = getEventPayload(message, eventType);
   const eventTimestamp = asString(eventPayload?.timestamp);
   const mail = asRecord(message.mail);
   const mailTimestamp = asString(mail?.timestamp);
@@ -89,27 +122,49 @@ export async function POST(req: NextRequest) {
       let detail = "";
       switch (eventType) {
         case "Bounce": {
-          const bounce = asRecord(message.bounce);
+          const bounce = getEventPayload(message, eventType);
           const bounceType = asString(bounce?.bounceType);
           const bounceSubType = asString(bounce?.bounceSubType);
-          detail = bounceType
-            ? `${bounceType}/${bounceSubType ?? ""}`
-            : "";
+          detail = [bounceType, bounceSubType].filter(Boolean).join("/");
           break;
         }
         case "Complaint": {
-          const complaint = asRecord(message.complaint);
+          const complaint = getEventPayload(message, eventType);
           detail = asString(complaint?.complaintFeedbackType) ?? "";
           break;
         }
         case "Click": {
-          const click = asRecord(message.click);
+          const click = getEventPayload(message, eventType);
           detail = asString(click?.link) ?? "";
           break;
         }
         case "Open": {
-          const open = asRecord(message.open);
+          const open = getEventPayload(message, eventType);
           detail = asString(open?.userAgent) ?? "";
+          break;
+        }
+        case "Reject": {
+          const reject = getEventPayload(message, eventType);
+          detail = asString(reject?.reason) ?? "";
+          break;
+        }
+        case "DeliveryDelay": {
+          const delay = getEventPayload(message, eventType);
+          const delayType = asString(delay?.delayType);
+          const expirationTime = asString(delay?.expirationTime);
+          detail = [delayType, expirationTime].filter(Boolean).join(" · ");
+          break;
+        }
+        case "RenderingFailure": {
+          const failure = getEventPayload(message, eventType);
+          const templateName = asString(failure?.templateName);
+          const errorMessage = asString(failure?.errorMessage);
+          detail = [templateName, errorMessage].filter(Boolean).join(" · ");
+          break;
+        }
+        case "Subscription": {
+          const subscription = getEventPayload(message, eventType);
+          detail = asString(subscription?.subscriptionType) ?? "";
           break;
         }
       }
