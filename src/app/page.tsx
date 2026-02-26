@@ -2513,8 +2513,28 @@ export default function ComposePage() {
         )}
 
         {tab === "settings" && (
-          <div className="flex-1 p-6 pb-24 overflow-y-auto">
-            <h1 className="text-xl font-semibold mb-1">Settings</h1>
+          <div className="flex-1 p-6 overflow-y-auto">
+            <div className="flex items-center justify-between mb-1">
+              <h1 className="text-xl font-semibold">Settings</h1>
+              <div className="flex items-center gap-3">
+                {settingsStatusText && (
+                  <p
+                    aria-live="polite"
+                    className={`text-xs ${settingsStatusClass}`}
+                  >
+                    {settingsStatusText}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  onClick={() => void saveWorkspaceSettingsNow()}
+                  disabled={!canSaveSettings}
+                  className="rounded bg-black px-4 py-2 text-xs font-semibold text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isSettingsSaving ? "Saving..." : "Save settings"}
+                </button>
+              </div>
+            </div>
             <p className="text-xs text-gray-400 mb-6">{workspace.name}</p>
 
             <details open className="rounded border border-gray-200 bg-gray-50 p-4 mb-6 [&>summary]:list-none [&>summary::-webkit-details-marker]:hidden">
@@ -2746,8 +2766,8 @@ export default function ComposePage() {
             </details>
 
             {/* Sender */}
-            <div className="border-t border-gray-200 pt-5 mt-6">
-              <h2 className="text-sm font-semibold text-gray-800 mb-4">Sender</h2>
+            <div className="border-t border-gray-200 pt-6 mt-6">
+              <h2 className="text-base font-semibold text-gray-900 mb-4">Sender</h2>
               <div className="flex flex-col gap-5 max-w-xl">
                 <label className="flex flex-col gap-1">
                   <span className="text-sm font-medium text-gray-600">
@@ -2777,8 +2797,8 @@ export default function ComposePage() {
             </div>
 
             {/* Email Footer */}
-            <div className="border-t border-gray-200 pt-5 mt-6">
-              <h2 className="text-sm font-semibold text-gray-800 mb-4">Email Footer</h2>
+            <div className="border-t border-gray-200 pt-6 mt-6">
+              <h2 className="text-base font-semibold text-gray-900 mb-4">Email Footer</h2>
               <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_26rem] gap-6 items-start">
                 <div className="flex flex-col gap-5 max-w-xl">
                   <div className="rounded border border-gray-200 bg-gray-50 p-3">
@@ -2852,8 +2872,8 @@ export default function ComposePage() {
             </div>
 
             {/* Sending */}
-            <div className="border-t border-gray-200 pt-5 mt-6">
-              <h2 className="text-sm font-semibold text-gray-800 mb-4">Sending</h2>
+            <div className="border-t border-gray-200 pt-6 mt-6">
+              <h2 className="text-base font-semibold text-gray-900 mb-4">Sending</h2>
               <div className="flex flex-col gap-5 max-w-xl">
                 <label className="flex flex-col gap-1">
                   <span className="text-sm font-medium text-gray-600">
@@ -2903,8 +2923,8 @@ export default function ComposePage() {
             </div>
 
             {/* API Keys */}
-            <div className="border-t border-gray-200 pt-5 mt-6">
-              <h2 className="text-sm font-semibold text-gray-800 mb-4">API Keys</h2>
+            <div className="border-t border-gray-200 pt-6 mt-6">
+              <h2 className="text-base font-semibold text-gray-900 mb-4">API Keys</h2>
               <p className="text-xs text-gray-500 mb-3">
                 Create keys to access the API programmatically.
               </p>
@@ -2996,25 +3016,6 @@ export default function ComposePage() {
               </div>
             </div>
 
-            {/* Sticky save bar */}
-            <div className="sticky bottom-0 -mx-6 mt-6 border-t border-gray-200 bg-white/95 backdrop-blur-sm px-6 py-3 flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => void saveWorkspaceSettingsNow()}
-                disabled={!canSaveSettings}
-                className="rounded bg-black px-3 py-2 text-xs font-semibold text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {isSettingsSaving ? "Saving..." : "Save settings"}
-              </button>
-              {settingsStatusText && (
-                <p
-                  aria-live="polite"
-                  className={`text-xs ${settingsStatusClass}`}
-                >
-                  {settingsStatusText}
-                </p>
-              )}
-            </div>
           </div>
         )}
 
