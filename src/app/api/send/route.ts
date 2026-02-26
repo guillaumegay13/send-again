@@ -140,7 +140,8 @@ export async function POST(req: NextRequest) {
     }
 
     const fromDomain = body.from.split("@")[1]?.toLowerCase() ?? "";
-    if (fromDomain !== body.workspaceId.toLowerCase()) {
+    const workspaceDomain = body.workspaceId.toLowerCase();
+    if (fromDomain !== workspaceDomain && !fromDomain.endsWith("." + workspaceDomain)) {
       return NextResponse.json(
         { error: "From address does not match workspace" },
         { status: 400 }
