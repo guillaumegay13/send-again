@@ -66,6 +66,7 @@ interface TopicDeliveryAnalytics {
 
 const HISTORY_RULES_PAGE_SIZE = 100;
 const HISTORY_TABLE_PAGE_SIZE = 25;
+const NAMECHEAP_DNS_STORAGE_KEY = "send-again.namecheap-dns";
 
 interface SendJobStatusResponse {
   id: string;
@@ -119,6 +120,24 @@ interface SetupStatus {
   unsubscribePageFound: boolean;
 }
 
+interface NamecheapDnsConfig {
+  apiUser: string;
+  username: string;
+  apiKey: string;
+  clientIp: string;
+  useSandbox: boolean;
+}
+
+interface NamecheapDnsSetupResult {
+  zoneDomain: string;
+  existingRecords: number;
+  replacedRecords: number;
+  totalRecords: number;
+  appliedRecords: number;
+}
+
+type DnsProvider = "manual" | "namecheap" | "cloudflare" | "route53";
+
 type FieldOperator = "equals" | "notEquals" | "contains" | "notContains";
 type ConditionMatchMode = "all" | "any";
 type HistoryEventType = "send" | "delivery" | "open" | "click" | "bounce" | "complaint";
@@ -153,6 +172,36 @@ function parseBooleanLike(value: string): boolean | null {
   if (["true", "1", "yes", "y", "verified"].includes(normalized)) return true;
   if (["false", "0", "no", "n", "unverified"].includes(normalized)) return false;
   return null;
+}
+
+function isDnsProvider(value: unknown): value is DnsProvider {
+  return (
+    value === "manual" ||
+    value === "namecheap" ||
+    value === "cloudflare" ||
+    value === "route53"
+  );
+}
+
+function loadPersistedDnsSetupState(): Partial<NamecheapDnsConfig> & {
+  provider?: DnsProvider;
+} {
+  if (typeof window === "undefined") return {};
+
+  try {
+    const raw = window.localStorage.getItem(NAMECHEAP_DNS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return {
+      provider: isDnsProvider(parsed.provider) ? parsed.provider : undefined,
+      apiUser: typeof parsed.apiUser === "string" ? parsed.apiUser : "",
+      username: typeof parsed.username === "string" ? parsed.username : "",
+      clientIp: typeof parsed.clientIp === "string" ? parsed.clientIp : "",
+      useSandbox: typeof parsed.useSandbox === "boolean" ? parsed.useSandbox : false,
+    };
+  } catch {
+    return {};
+  }
 }
 
 function normalizeHistoryEventType(eventType: string): HistoryEventType | null {
@@ -710,6 +759,18 @@ export default function ComposePage() {
   const [setupLoading, setSetupLoading] = useState(false);
   const [setupActionLoading, setSetupActionLoading] = useState<string | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [dnsProvider, setDnsProvider] = useState<DnsProvider>("manual");
+  const [namecheapConfig, setNamecheapConfig] = useState<NamecheapDnsConfig>({
+    apiUser: "",
+    username: "",
+    apiKey: "",
+    clientIp: "",
+    useSandbox: false,
+  });
+  const [namecheapStatus, setNamecheapStatus] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -749,6 +810,40 @@ export default function ComposePage() {
     },
     [authFetch]
   );
+
+  useEffect(() => {
+    const persisted = loadPersistedDnsSetupState();
+    if (persisted.provider) {
+      setDnsProvider(persisted.provider);
+    }
+    setNamecheapConfig((current) => ({
+      ...current,
+      ...persisted,
+    }));
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const payload = {
+      provider: dnsProvider,
+      apiUser: namecheapConfig.apiUser,
+      username: namecheapConfig.username,
+      clientIp: namecheapConfig.clientIp,
+      useSandbox: namecheapConfig.useSandbox,
+    };
+    window.localStorage.setItem(NAMECHEAP_DNS_STORAGE_KEY, JSON.stringify(payload));
+  }, [
+    dnsProvider,
+    namecheapConfig.apiUser,
+    namecheapConfig.username,
+    namecheapConfig.clientIp,
+    namecheapConfig.useSandbox,
+  ]);
+
+  useEffect(() => {
+    setNamecheapStatus(null);
+  }, [dnsProvider]);
 
   const clearSettingsSavedResetTimer = useCallback(() => {
     if (!settingsSavedResetRef.current) return;
@@ -925,6 +1020,7 @@ export default function ComposePage() {
       setTopicAnalyticsError(null);
       setTopicAnalytics(null);
       setHistoryLoading(false);
+      setNamecheapStatus(null);
       return;
     }
 
@@ -978,6 +1074,7 @@ export default function ComposePage() {
     setTopicAnalyticsLoading(false);
     setTopicAnalyticsError(null);
     setTopicAnalytics(null);
+    setNamecheapStatus(null);
   }, [activeId]);
 
   useEffect(() => {
@@ -1135,7 +1232,7 @@ export default function ComposePage() {
     } finally {
       setSetupLoading(false);
     }
-  }, [workspace?.id, workspace?.configSet, fetchJson]);
+  }, [workspace, fetchJson]);
 
   useEffect(() => {
     if (tab === "settings" && sessionToken && workspace) {
@@ -1159,6 +1256,59 @@ export default function ComposePage() {
       await fetchSetupStatus();
     } catch (e) {
       console.error(`Setup action ${action} failed:`, e);
+    } finally {
+      setSetupActionLoading(null);
+    }
+  }
+
+  function updateNamecheapConfig(patch: Partial<NamecheapDnsConfig>) {
+    setNamecheapConfig((current) => ({ ...current, ...patch }));
+  }
+
+  async function configureNamecheapDns() {
+    if (!workspace) return;
+
+    const payload = {
+      apiUser: namecheapConfig.apiUser.trim(),
+      username: namecheapConfig.username.trim(),
+      apiKey: namecheapConfig.apiKey.trim(),
+      clientIp: namecheapConfig.clientIp.trim(),
+      useSandbox: namecheapConfig.useSandbox,
+    };
+
+    if (!payload.apiUser || !payload.username || !payload.apiKey || !payload.clientIp) {
+      setNamecheapStatus({
+        type: "error",
+        message: "Fill API User, Username, API Key and Client IP before applying DNS.",
+      });
+      return;
+    }
+
+    setNamecheapStatus(null);
+    setSetupActionLoading("configure-namecheap-dns");
+    try {
+      const result = await fetchJson<NamecheapDnsSetupResult>("/api/workspaces/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          domain: workspace.id,
+          action: "configure-namecheap-dns",
+          configSet: workspace.configSet,
+          namecheap: payload,
+        }),
+      });
+
+      setNamecheapStatus({
+        type: "success",
+        message: `Updated ${result.appliedRecords} SES records in ${result.zoneDomain} (${result.totalRecords} total DNS records now configured).`,
+      });
+      await fetchSetupStatus();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setNamecheapStatus({
+        type: "error",
+        message,
+      });
     } finally {
       setSetupActionLoading(null);
     }
@@ -1252,6 +1402,7 @@ export default function ComposePage() {
     setNewWorkspaceId("");
     setBodyVibeStatus(null);
     setFooterVibeStatus(null);
+    setNamecheapStatus(null);
   }
 
   async function addWorkspaceById(rawId: string) {
@@ -2026,6 +2177,15 @@ export default function ComposePage() {
       : settingsSaveState === "error"
       ? "text-red-700"
       : "text-gray-500";
+  const isNamecheapProvider = dnsProvider === "namecheap";
+  const isProviderAutoSyncComingSoon =
+    dnsProvider === "cloudflare" || dnsProvider === "route53";
+  const namecheapApplyBusy = setupActionLoading === "configure-namecheap-dns";
+  const isNamecheapConfigComplete =
+    namecheapConfig.apiUser.trim().length > 0 &&
+    namecheapConfig.username.trim().length > 0 &&
+    namecheapConfig.apiKey.trim().length > 0 &&
+    namecheapConfig.clientIp.trim().length > 0;
 
   return (
     <div className="flex h-screen">
@@ -2941,6 +3101,127 @@ export default function ComposePage() {
                 </button>
               </div>
               <div className="flex flex-col gap-3">
+
+                <div className="rounded border border-gray-200 bg-white p-3">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-sm text-gray-700 font-medium">DNS provider</span>
+                    <select
+                      value={dnsProvider}
+                      onChange={(event) => setDnsProvider(event.target.value as DnsProvider)}
+                      className="max-w-xs rounded border border-gray-300 bg-white px-2 py-1.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-black"
+                    >
+                      <option value="manual">Manual DNS</option>
+                      <option value="namecheap">Namecheap</option>
+                      <option value="cloudflare">Cloudflare (coming soon)</option>
+                      <option value="route53">Amazon Route 53 (coming soon)</option>
+                    </select>
+                    <span className="text-[11px] text-gray-500">
+                      Choose where DNS should be managed for this domain.
+                    </span>
+                  </label>
+                </div>
+
+                {isProviderAutoSyncComingSoon && (
+                  <p className="rounded border border-blue-200 bg-blue-50 px-3 py-2 text-[11px] text-blue-700">
+                    Auto-sync for this provider is coming soon. Use the manual records below for now.
+                  </p>
+                )}
+
+                {isNamecheapProvider && (
+                  <div className="rounded border border-gray-200 bg-white p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm text-gray-700 font-medium">Auto-configure DNS in Namecheap</p>
+                        <p className="mt-1 text-xs text-gray-500">
+                          Applies SES verification, DKIM, SPF, and DMARC records automatically.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void configureNamecheapDns()}
+                        disabled={namecheapApplyBusy || !isNamecheapConfigComplete}
+                        className="shrink-0 rounded border border-gray-300 bg-white px-2 py-1 text-[11px] font-medium hover:bg-gray-100 disabled:opacity-50"
+                      >
+                        {namecheapApplyBusy ? "Applying..." : "Apply in Namecheap"}
+                      </button>
+                    </div>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[11px] text-gray-500">API User</span>
+                        <input
+                          type="text"
+                          value={namecheapConfig.apiUser}
+                          onChange={(event) =>
+                            updateNamecheapConfig({ apiUser: event.target.value })
+                          }
+                          placeholder="your-namecheap-api-user"
+                          className="border border-gray-300 rounded px-2 py-1 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-black"
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[11px] text-gray-500">Username</span>
+                        <input
+                          type="text"
+                          value={namecheapConfig.username}
+                          onChange={(event) =>
+                            updateNamecheapConfig({ username: event.target.value })
+                          }
+                          placeholder="your-namecheap-username"
+                          className="border border-gray-300 rounded px-2 py-1 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-black"
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[11px] text-gray-500">Client IP (whitelisted)</span>
+                        <input
+                          type="text"
+                          value={namecheapConfig.clientIp}
+                          onChange={(event) =>
+                            updateNamecheapConfig({ clientIp: event.target.value })
+                          }
+                          placeholder="203.0.113.10"
+                          className="border border-gray-300 rounded px-2 py-1 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-black"
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[11px] text-gray-500">API Key</span>
+                        <input
+                          type="password"
+                          value={namecheapConfig.apiKey}
+                          onChange={(event) =>
+                            updateNamecheapConfig({ apiKey: event.target.value })
+                          }
+                          autoComplete="off"
+                          className="border border-gray-300 rounded px-2 py-1 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-black"
+                        />
+                      </label>
+                    </div>
+                    <label className="mt-2 inline-flex items-center gap-2 text-[11px] text-gray-600">
+                      <input
+                        type="checkbox"
+                        checked={namecheapConfig.useSandbox}
+                        onChange={(event) =>
+                          updateNamecheapConfig({ useSandbox: event.target.checked })
+                        }
+                        className="h-3.5 w-3.5 rounded border-gray-300 text-black focus:ring-black"
+                      />
+                      Use Namecheap sandbox API
+                    </label>
+                    <p className="mt-1 text-[11px] text-gray-400">
+                      API key is used only for the apply action and is not saved to local storage.
+                    </p>
+                    {namecheapStatus && (
+                      <p
+                        className={`mt-2 rounded border px-2 py-1 text-[11px] ${
+                          namecheapStatus.type === "success"
+                            ? "border-green-200 bg-green-50 text-green-700"
+                            : "border-red-200 bg-red-50 text-red-700"
+                        }`}
+                      >
+                        {namecheapStatus.message}
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {/* 1. Verify domain */}
                 <div className="rounded border border-gray-200 bg-white p-3">

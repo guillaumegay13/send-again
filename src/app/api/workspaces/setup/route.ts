@@ -7,7 +7,58 @@ import {
   createConfigurationSet,
   configurationSetExists,
 } from "@/lib/ses";
+import { userCanAccessWorkspace } from "@/lib/db";
+import {
+  buildNamecheapCredentials,
+  configureSesDnsInNamecheap,
+  type NamecheapCredentialsInput,
+} from "@/lib/namecheap";
 import { requireAuthenticatedUser, apiErrorResponse } from "@/lib/auth";
+
+function normalizeDomain(value: string | null | undefined): string {
+  return (value ?? "").trim().toLowerCase().replace(/\.+$/, "");
+}
+
+function parseBooleanLike(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return null;
+  if (["1", "true", "yes", "y"].includes(normalized)) return true;
+  if (["0", "false", "no", "n"].includes(normalized)) return false;
+  return null;
+}
+
+function parseNamecheapInput(value: unknown): NamecheapCredentialsInput {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  const input = value as Record<string, unknown>;
+  const useSandbox = parseBooleanLike(input.useSandbox);
+
+  return {
+    apiUser: typeof input.apiUser === "string" ? input.apiUser : undefined,
+    username: typeof input.username === "string" ? input.username : undefined,
+    apiKey: typeof input.apiKey === "string" ? input.apiKey : undefined,
+    clientIp: typeof input.clientIp === "string" ? input.clientIp : undefined,
+    useSandbox: useSandbox === null ? undefined : useSandbox,
+  };
+}
+
+function buildResolvedNamecheapCredentials(
+  input: NamecheapCredentialsInput
+) {
+  const envUseSandbox = parseBooleanLike(process.env.NAMECHEAP_SANDBOX);
+
+  return buildNamecheapCredentials({
+    apiUser: input.apiUser ?? process.env.NAMECHEAP_API_USER,
+    username: input.username ?? process.env.NAMECHEAP_USERNAME,
+    apiKey: input.apiKey ?? process.env.NAMECHEAP_API_KEY,
+    clientIp: input.clientIp ?? process.env.NAMECHEAP_CLIENT_IP,
+    useSandbox: input.useSandbox ?? envUseSandbox ?? false,
+  });
+}
 
 async function checkSpf(domain: string): Promise<boolean> {
   try {
@@ -42,14 +93,19 @@ async function checkUnsubscribePage(websiteUrl: string): Promise<boolean> {
 
 export async function GET(req: NextRequest) {
   try {
-    await requireAuthenticatedUser(req);
+    const user = await requireAuthenticatedUser(req);
 
-    const domain = req.nextUrl.searchParams.get("domain");
+    const domain = normalizeDomain(req.nextUrl.searchParams.get("domain"));
     if (!domain) {
       return NextResponse.json(
         { error: "domain query parameter is required" },
         { status: 400 }
       );
+    }
+
+    const hasAccess = await userCanAccessWorkspace(user.id, domain);
+    if (!hasAccess) {
+      return NextResponse.json({ error: "Workspace not found" }, { status: 403 });
     }
 
     const configSetName = req.nextUrl.searchParams.get("configSet") ?? "";
@@ -80,20 +136,26 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    await requireAuthenticatedUser(req);
+    const user = await requireAuthenticatedUser(req);
 
     const body = await req.json();
-    const { domain, action, configSet } = body as {
+    const { domain: rawDomain, action, configSet } = body as {
       domain?: string;
       action?: string;
       configSet?: string;
     };
+    const domain = normalizeDomain(rawDomain);
 
     if (!domain) {
       return NextResponse.json(
         { error: "domain is required" },
         { status: 400 }
       );
+    }
+
+    const hasAccess = await userCanAccessWorkspace(user.id, domain);
+    if (!hasAccess) {
+      return NextResponse.json({ error: "Workspace not found" }, { status: 403 });
     }
 
     switch (action) {
@@ -114,6 +176,38 @@ export async function POST(req: NextRequest) {
         }
         await createConfigurationSet(configSet);
         return NextResponse.json({ ok: true });
+      }
+      case "configure-namecheap-dns": {
+        const namecheapInput = parseNamecheapInput((body as Record<string, unknown>).namecheap);
+        const credentials = buildResolvedNamecheapCredentials(namecheapInput);
+
+        const status = await getDomainSetupStatus(domain);
+        const verificationToken =
+          status.verificationToken ?? (await verifyDomain(domain));
+        if (!verificationToken) {
+          return NextResponse.json(
+            { error: "SES verification token is missing" },
+            { status: 500 }
+          );
+        }
+
+        const dkimTokens =
+          status.dkimTokens.length > 0 ? status.dkimTokens : await setupDkim(domain);
+        if (dkimTokens.length === 0) {
+          return NextResponse.json(
+            { error: "SES DKIM tokens are missing" },
+            { status: 500 }
+          );
+        }
+
+        const result = await configureSesDnsInNamecheap({
+          domain,
+          verificationToken,
+          dkimTokens,
+          credentials,
+        });
+
+        return NextResponse.json(result);
       }
       default:
         return NextResponse.json(

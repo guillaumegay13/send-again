@@ -36,6 +36,11 @@ SEND_JOB_PROCESSOR_TOKEN=optional-worker-token
 SEND_JOB_BATCH_SIZE=50
 SEND_JOB_CONCURRENCY=4
 SEND_JOB_MAX_RECIPIENTS_PER_JOB=250
+NAMECHEAP_API_USER=your-namecheap-api-user
+NAMECHEAP_USERNAME=your-namecheap-username
+NAMECHEAP_API_KEY=your-namecheap-api-key
+NAMECHEAP_CLIENT_IP=your-whitelisted-public-ipv4
+NAMECHEAP_SANDBOX=false
 ```
 
 | Variable | Required | Default | Description |
@@ -52,6 +57,11 @@ SEND_JOB_MAX_RECIPIENTS_PER_JOB=250
 | `OPENAI_MODEL` | No | `gpt-4.1-mini` | Model used for vibe generation |
 | `INITIAL_OWNER_EMAIL` | No | `guillaume.gay@protonmail.com` | Bootstrap owner account that is allowed and auto-linked to existing workspaces |
 | `ALLOWED_AUTH_EMAILS` | No | `INITIAL_OWNER_EMAIL` | Comma-separated allowlist for login access |
+| `NAMECHEAP_API_USER` | No | — | Optional fallback for DNS automation in Settings > Email Deliverability Setup |
+| `NAMECHEAP_USERNAME` | No | — | Optional fallback for DNS automation in Settings > Email Deliverability Setup |
+| `NAMECHEAP_API_KEY` | No | — | Optional fallback for DNS automation in Settings > Email Deliverability Setup |
+| `NAMECHEAP_CLIENT_IP` | No | — | Optional fallback IPv4 (must be whitelisted in Namecheap API access) |
+| `NAMECHEAP_SANDBOX` | No | `false` | Optional fallback to target Namecheap sandbox API (`true`/`false`) |
 | `SEND_JOB_BATCH_SIZE` | No | `50` | Number of recipients to fetch from queue per batch |
 | `SEND_JOB_CONCURRENCY` | No | `4` | Parallel sends per batch in the worker |
 | `SEND_JOB_MAX_RECIPIENTS_PER_JOB` | No | `250` | Max recipients processed per processor invocation |
