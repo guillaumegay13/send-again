@@ -2513,25 +2513,27 @@ export default function ComposePage() {
         )}
 
         {tab === "settings" && (
-          <div className="flex-1 p-6 overflow-y-auto">
+          <div className="flex-1 p-6 pb-24 overflow-y-auto">
             <h1 className="text-xl font-semibold mb-1">Settings</h1>
             <p className="text-xs text-gray-400 mb-6">{workspace.name}</p>
 
-            <div className="rounded border border-gray-200 bg-gray-50 p-4 mb-6">
-              <div className="flex items-center justify-between mb-1">
-                <p className="text-sm font-semibold text-gray-800">Email Deliverability Setup</p>
+            <details open className="rounded border border-gray-200 bg-gray-50 p-4 mb-6 [&>summary]:list-none [&>summary::-webkit-details-marker]:hidden">
+              <summary className="cursor-pointer text-sm font-semibold text-gray-800">
+                Email Deliverability Setup
+              </summary>
+              <div className="flex items-center justify-between mt-3 mb-3">
+                <p className="text-xs text-gray-500">
+                  Complete these steps to ensure your emails reach the inbox instead of spam.
+                </p>
                 <button
                   type="button"
                   onClick={() => fetchSetupStatus()}
                   disabled={setupLoading}
-                  className="rounded border border-gray-300 bg-white px-2 py-1 text-[11px] font-medium text-gray-600 hover:bg-gray-100 disabled:opacity-50"
+                  className="shrink-0 rounded border border-gray-300 bg-white px-2 py-1 text-[11px] font-medium text-gray-600 hover:bg-gray-100 disabled:opacity-50"
                 >
                   {setupLoading ? "Checking..." : "Refresh status"}
                 </button>
               </div>
-              <p className="text-xs text-gray-500 mb-3">
-                Complete these steps to ensure your emails reach the inbox instead of spam.
-              </p>
               <div className="flex flex-col gap-3">
 
                 {/* 1. Verify domain */}
@@ -2741,9 +2743,11 @@ export default function ComposePage() {
                 </div>
 
               </div>
-            </div>
+            </details>
 
-            <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_26rem] gap-6 items-start">
+            {/* Sender */}
+            <div className="border-t border-gray-200 pt-5 mt-6">
+              <h2 className="text-sm font-semibold text-gray-800 mb-4">Sender</h2>
               <div className="flex flex-col gap-5 max-w-xl">
                 <label className="flex flex-col gap-1">
                   <span className="text-sm font-medium text-gray-600">
@@ -2769,7 +2773,88 @@ export default function ComposePage() {
                     className="border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
                   />
                 </label>
+              </div>
+            </div>
 
+            {/* Email Footer */}
+            <div className="border-t border-gray-200 pt-5 mt-6">
+              <h2 className="text-sm font-semibold text-gray-800 mb-4">Email Footer</h2>
+              <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_26rem] gap-6 items-start">
+                <div className="flex flex-col gap-5 max-w-xl">
+                  <div className="rounded border border-gray-200 bg-gray-50 p-3">
+                    <p className="text-sm font-medium text-gray-700">Vibe Footer</p>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Describe the footer style or ask for edits. Each run updates the current footer.
+                    </p>
+                    <textarea
+                      value={footerVibePrompt}
+                      onChange={(e) => setFooterVibePrompt(e.target.value)}
+                      rows={3}
+                      placeholder="Create a clean minimal footer with brand tone, website link and unsubscribe."
+                      className="mt-2 w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black resize-y"
+                    />
+                    <div className="mt-2 flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => generateVibeHtml("footer")}
+                        disabled={footerVibeBusy}
+                        className="rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {footerVibeBusy ? "Generating..." : "Generate Footer HTML"}
+                      </button>
+                      {footerVibeStatus && (
+                        <span className="text-xs text-gray-500">{footerVibeStatus}</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <label className="flex flex-col gap-1">
+                    <span className="text-sm font-medium text-gray-600">
+                      Footer HTML (appended to every email)
+                    </span>
+                    <textarea
+                      rows={8}
+                      value={workspace.footerHtml}
+                      onChange={(e) =>
+                        updateWorkspace({ footerHtml: e.target.value })
+                      }
+                      placeholder="<p>Thanks for reading.</p><p><a href='{{unsubscribe_url}}'>Unsubscribe</a></p>"
+                      className="border border-gray-300 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-black resize-y"
+                    />
+                    <span className="text-xs text-gray-400">
+                      Supported variables:{" "}
+                      <code className="bg-gray-100 px-1 rounded">
+                        {"{{unsubscribe_url}}"}
+                      </code>{" "}
+                      and{" "}
+                      <code className="bg-gray-100 px-1 rounded">
+                        {"{{workspace_url}}"}
+                      </code>
+                    </span>
+                  </label>
+                </div>
+
+                <div className="flex flex-col gap-2 xl:sticky xl:top-6">
+                  <span className="text-sm font-medium text-gray-600">
+                    Footer Preview
+                  </span>
+                  <p className="text-xs text-gray-400">
+                    Preview uses sample values for unsubscribe and workspace links.
+                  </p>
+                  <iframe
+                    title="Footer preview"
+                    srcDoc={footerPreviewDoc}
+                    className="h-[28rem] w-full rounded border border-gray-200 bg-white"
+                    sandbox="allow-same-origin"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Sending */}
+            <div className="border-t border-gray-200 pt-5 mt-6">
+              <h2 className="text-sm font-semibold text-gray-800 mb-4">Sending</h2>
+              <div className="flex flex-col gap-5 max-w-xl">
                 <label className="flex flex-col gap-1">
                   <span className="text-sm font-medium text-gray-600">
                     SES Configuration Set
@@ -2799,58 +2884,6 @@ export default function ComposePage() {
                   />
                 </label>
 
-                <div className="rounded border border-gray-200 bg-gray-50 p-3">
-                  <p className="text-sm font-medium text-gray-700">Vibe Footer</p>
-                  <p className="mt-1 text-xs text-gray-500">
-                    Describe the footer style or ask for edits. Each run updates the current footer.
-                  </p>
-                  <textarea
-                    value={footerVibePrompt}
-                    onChange={(e) => setFooterVibePrompt(e.target.value)}
-                    rows={3}
-                    placeholder="Create a clean minimal footer with brand tone, website link and unsubscribe."
-                    className="mt-2 w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black resize-y"
-                  />
-                  <div className="mt-2 flex items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => generateVibeHtml("footer")}
-                      disabled={footerVibeBusy}
-                      className="rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {footerVibeBusy ? "Generating..." : "Generate Footer HTML"}
-                    </button>
-                    {footerVibeStatus && (
-                      <span className="text-xs text-gray-500">{footerVibeStatus}</span>
-                    )}
-                  </div>
-                </div>
-
-                <label className="flex flex-col gap-1">
-                  <span className="text-sm font-medium text-gray-600">
-                    Footer HTML (appended to every email)
-                  </span>
-                  <textarea
-                    rows={8}
-                    value={workspace.footerHtml}
-                    onChange={(e) =>
-                      updateWorkspace({ footerHtml: e.target.value })
-                    }
-                    placeholder="<p>Thanks for reading.</p><p><a href='{{unsubscribe_url}}'>Unsubscribe</a></p>"
-                    className="border border-gray-300 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-black resize-y"
-                  />
-                  <span className="text-xs text-gray-400">
-                    Supported variables:{" "}
-                    <code className="bg-gray-100 px-1 rounded">
-                      {"{{unsubscribe_url}}"}
-                    </code>{" "}
-                    and{" "}
-                    <code className="bg-gray-100 px-1 rounded">
-                      {"{{workspace_url}}"}
-                    </code>
-                  </span>
-                </label>
-
                 <label className="flex flex-col gap-1">
                   <span className="text-sm font-medium text-gray-600">
                     Rate limit between sends (ms)
@@ -2866,132 +2899,121 @@ export default function ComposePage() {
                     className="border border-gray-300 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-black w-32"
                   />
                 </label>
+              </div>
+            </div>
 
-                <div className="flex flex-wrap items-center gap-3 rounded border border-gray-200 bg-gray-50 p-3">
-                  <button
-                    type="button"
-                    onClick={() => void saveWorkspaceSettingsNow()}
-                    disabled={!canSaveSettings}
-                    className="rounded bg-black px-3 py-2 text-xs font-semibold text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {isSettingsSaving ? "Saving..." : "Save settings"}
-                  </button>
-                  {settingsStatusText && (
-                    <p
-                      aria-live="polite"
-                      className={`text-xs ${settingsStatusClass}`}
-                    >
-                      {settingsStatusText}
+            {/* API Keys */}
+            <div className="border-t border-gray-200 pt-5 mt-6">
+              <h2 className="text-sm font-semibold text-gray-800 mb-4">API Keys</h2>
+              <p className="text-xs text-gray-500 mb-3">
+                Create keys to access the API programmatically.
+              </p>
+
+              <div className="max-w-xl">
+                {newlyCreatedKey && (
+                  <div className="mb-3 rounded border border-green-300 bg-green-50 p-3">
+                    <p className="text-xs font-medium text-green-800">
+                      Key created — copy it now, it won&apos;t be shown again:
                     </p>
-                  )}
-                </div>
-
-                <div className="mt-4 border-t border-gray-200 pt-4">
-                  <h3 className="text-sm font-semibold text-gray-800">API Keys</h3>
-                  <p className="text-xs text-gray-500 mt-1">
-                    Create keys to access the API programmatically.
-                  </p>
-
-                  {newlyCreatedKey && (
-                    <div className="mt-3 rounded border border-green-300 bg-green-50 p-3">
-                      <p className="text-xs font-medium text-green-800">
-                        Key created — copy it now, it won&apos;t be shown again:
-                      </p>
-                      <div className="mt-1 flex items-center gap-2">
-                        <code className="flex-1 break-all rounded bg-white px-2 py-1 text-xs font-mono text-green-900 border border-green-200">
-                          {newlyCreatedKey}
-                        </code>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            navigator.clipboard.writeText(newlyCreatedKey);
-                          }}
-                          className="rounded border border-green-300 bg-white px-2 py-1 text-xs font-medium text-green-700 hover:bg-green-100"
-                        >
-                          Copy
-                        </button>
-                      </div>
+                    <div className="mt-1 flex items-center gap-2">
+                      <code className="flex-1 break-all rounded bg-white px-2 py-1 text-xs font-mono text-green-900 border border-green-200">
+                        {newlyCreatedKey}
+                      </code>
                       <button
                         type="button"
-                        onClick={() => setNewlyCreatedKey(null)}
-                        className="mt-2 text-xs text-green-600 underline"
+                        onClick={() => {
+                          navigator.clipboard.writeText(newlyCreatedKey);
+                        }}
+                        className="rounded border border-green-300 bg-white px-2 py-1 text-xs font-medium text-green-700 hover:bg-green-100"
                       >
-                        Dismiss
+                        Copy
                       </button>
                     </div>
-                  )}
-
-                  <div className="mt-3 flex items-end gap-2">
-                    <label className="flex flex-col gap-1 flex-1">
-                      <span className="text-xs text-gray-500">Key name</span>
-                      <input
-                        type="text"
-                        value={newKeyName}
-                        onChange={(e) => setNewKeyName(e.target.value)}
-                        placeholder="e.g. CI pipeline"
-                        className="border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
-                      />
-                    </label>
                     <button
                       type="button"
-                      onClick={createApiKeyHandler}
-                      disabled={creatingKey}
-                      className="rounded bg-black text-white px-3 py-2 text-sm font-medium hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
+                      onClick={() => setNewlyCreatedKey(null)}
+                      className="mt-2 text-xs text-green-600 underline"
                     >
-                      {creatingKey ? "Creating..." : "Create"}
+                      Dismiss
                     </button>
                   </div>
+                )}
 
-                  {apiKeysLoading ? (
-                    <p className="mt-3 text-xs text-gray-400">Loading keys...</p>
-                  ) : apiKeys.length === 0 ? (
-                    <p className="mt-3 text-xs text-gray-400">No API keys yet.</p>
-                  ) : (
-                    <ul className="mt-3 divide-y divide-gray-100">
-                      {apiKeys.map((k) => (
-                        <li
-                          key={k.id}
-                          className="flex items-center justify-between py-2 gap-3"
-                        >
-                          <div className="min-w-0">
-                            <span className="text-sm font-medium text-gray-800 block truncate">
-                              {k.name || "(unnamed)"}
-                            </span>
-                            <span className="text-xs text-gray-400 font-mono">
-                              {k.keyPrefix}...
-                            </span>
-                            <span className="text-xs text-gray-400 ml-2">
-                              {new Date(k.createdAt).toLocaleDateString()}
-                            </span>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => deleteApiKeyHandler(k.id)}
-                            className="rounded border border-red-200 px-2 py-1 text-xs text-red-600 hover:bg-red-50"
-                          >
-                            Delete
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
+                <div className="flex items-end gap-2">
+                  <label className="flex flex-col gap-1 flex-1">
+                    <span className="text-xs text-gray-500">Key name</span>
+                    <input
+                      type="text"
+                      value={newKeyName}
+                      onChange={(e) => setNewKeyName(e.target.value)}
+                      placeholder="e.g. CI pipeline"
+                      className="border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={createApiKeyHandler}
+                    disabled={creatingKey}
+                    className="rounded bg-black text-white px-3 py-2 text-sm font-medium hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {creatingKey ? "Creating..." : "Create"}
+                  </button>
                 </div>
-              </div>
 
-              <div className="flex flex-col gap-2 xl:sticky xl:top-6">
-                <span className="text-sm font-medium text-gray-600">
-                  Footer Preview
-                </span>
-                <p className="text-xs text-gray-400">
-                  Preview uses sample values for unsubscribe and workspace links.
-                </p>
-                <iframe
-                  title="Footer preview"
-                  srcDoc={footerPreviewDoc}
-                  className="h-[28rem] w-full rounded border border-gray-200 bg-white"
-                  sandbox="allow-same-origin"
-                />
+                {apiKeysLoading ? (
+                  <p className="mt-3 text-xs text-gray-400">Loading keys...</p>
+                ) : apiKeys.length === 0 ? (
+                  <p className="mt-3 text-xs text-gray-400">No API keys yet.</p>
+                ) : (
+                  <ul className="mt-3 divide-y divide-gray-100">
+                    {apiKeys.map((k) => (
+                      <li
+                        key={k.id}
+                        className="flex items-center justify-between py-2 gap-3"
+                      >
+                        <div className="min-w-0">
+                          <span className="text-sm font-medium text-gray-800 block truncate">
+                            {k.name || "(unnamed)"}
+                          </span>
+                          <span className="text-xs text-gray-400 font-mono">
+                            {k.keyPrefix}...
+                          </span>
+                          <span className="text-xs text-gray-400 ml-2">
+                            {new Date(k.createdAt).toLocaleDateString()}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => deleteApiKeyHandler(k.id)}
+                          className="rounded border border-red-200 px-2 py-1 text-xs text-red-600 hover:bg-red-50"
+                        >
+                          Delete
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
+            </div>
+
+            {/* Sticky save bar */}
+            <div className="sticky bottom-0 -mx-6 mt-6 border-t border-gray-200 bg-white/95 backdrop-blur-sm px-6 py-3 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => void saveWorkspaceSettingsNow()}
+                disabled={!canSaveSettings}
+                className="rounded bg-black px-3 py-2 text-xs font-semibold text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isSettingsSaving ? "Saving..." : "Save settings"}
+              </button>
+              {settingsStatusText && (
+                <p
+                  aria-live="polite"
+                  className={`text-xs ${settingsStatusClass}`}
+                >
+                  {settingsStatusText}
+                </p>
+              )}
             </div>
           </div>
         )}
