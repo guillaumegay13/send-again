@@ -43,6 +43,25 @@ function formatSourceAddress(from: string, fromName?: string): string {
   return `"${escapedName}" <${from}>`;
 }
 
+function htmlToPlainText(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n\n")
+    .replace(/<\/div>/gi, "\n")
+    .replace(/<\/li>/gi, "\n")
+    .replace(/<li[^>]*>/gi, "- ")
+    .replace(/<a[^>]+href="([^"]*)"[^>]*>(.*?)<\/a>/gi, "$2 ($1)")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 export async function sendEmail({
   from,
   fromName,
@@ -58,12 +77,16 @@ export async function sendEmail({
   html: string;
   configSet: string;
 }) {
+  const plainText = htmlToPlainText(html);
   const cmd = new SendEmailCommand({
     Source: formatSourceAddress(from, fromName),
     Destination: { ToAddresses: [to] },
     Message: {
       Subject: { Data: subject, Charset: "UTF-8" },
-      Body: { Html: { Data: html, Charset: "UTF-8" } },
+      Body: {
+        Html: { Data: html, Charset: "UTF-8" },
+        Text: { Data: plainText, Charset: "UTF-8" },
+      },
     },
     ConfigurationSetName: configSet,
   });
