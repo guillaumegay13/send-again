@@ -21,7 +21,11 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { workspace: workspaceParam, contacts } = body;
+    const { workspace: workspaceParam, contacts, returnContacts } = body as {
+      workspace?: string;
+      contacts?: unknown;
+      returnContacts?: boolean;
+    };
     if (!Array.isArray(contacts)) {
       return NextResponse.json(
         { error: "contacts[] required" },
@@ -30,9 +34,22 @@ export async function POST(req: NextRequest) {
     }
 
     const { workspace } = await requireWorkspaceAuth(req, workspaceParam);
+    const contactList = contacts as Array<{
+      email: string;
+      fields: Record<string, string>;
+    }>;
 
-    const filtered = await filterContactsAgainstUnsubscribes(workspace, contacts);
+    const filtered = await filterContactsAgainstUnsubscribes(workspace, contactList);
     await upsertContacts(workspace, filtered.contacts);
+
+    if (returnContacts === false) {
+      return NextResponse.json({
+        ok: true,
+        imported: filtered.contacts.length,
+        skippedUnsubscribed: filtered.skipped,
+      });
+    }
+
     return NextResponse.json(await getContacts(workspace));
   } catch (error) {
     return apiErrorResponse(error);

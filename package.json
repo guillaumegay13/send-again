@@ -9,8 +9,9 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.57.4",
+    "@aws-sdk/client-route-53": "^3.999.0",
     "@aws-sdk/client-ses": "^3.989.0",
+    "@supabase/supabase-js": "^2.57.4",
     "dagre": "^0.8.5",
     "next": "16.1.6",
     "react": "19.2.3",

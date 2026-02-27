@@ -41,6 +41,9 @@ NAMECHEAP_USERNAME=your-namecheap-username
 NAMECHEAP_API_KEY=your-namecheap-api-key
 NAMECHEAP_CLIENT_IP=your-whitelisted-public-ipv4
 NAMECHEAP_SANDBOX=false
+CLOUDFLARE_API_TOKEN=your-cloudflare-api-token
+CLOUDFLARE_ZONE_ID=optional-cloudflare-zone-id
+ROUTE53_HOSTED_ZONE_ID=optional-route53-hosted-zone-id
 ```
 
 | Variable | Required | Default | Description |
@@ -62,6 +65,9 @@ NAMECHEAP_SANDBOX=false
 | `NAMECHEAP_API_KEY` | No | — | Optional fallback for DNS automation in Settings > Email Deliverability Setup |
 | `NAMECHEAP_CLIENT_IP` | No | — | Optional fallback IPv4 (must be whitelisted in Namecheap API access) |
 | `NAMECHEAP_SANDBOX` | No | `false` | Optional fallback to target Namecheap sandbox API (`true`/`false`) |
+| `CLOUDFLARE_API_TOKEN` | No | — | Optional fallback Cloudflare token for DNS automation in Settings > Email Deliverability Setup |
+| `CLOUDFLARE_ZONE_ID` | No | — | Optional fallback Cloudflare Zone ID (if omitted, zone is auto-detected) |
+| `ROUTE53_HOSTED_ZONE_ID` | No | — | Optional fallback Route53 hosted zone id (if omitted, best zone match is auto-detected) |
 | `SEND_JOB_BATCH_SIZE` | No | `50` | Number of recipients to fetch from queue per batch |
 | `SEND_JOB_CONCURRENCY` | No | `4` | Parallel sends per batch in the worker |
 | `SEND_JOB_MAX_RECIPIENTS_PER_JOB` | No | `250` | Max recipients processed per processor invocation |

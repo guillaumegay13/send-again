@@ -13,6 +13,16 @@ import {
   configureSesDnsInNamecheap,
   type NamecheapCredentialsInput,
 } from "@/lib/namecheap";
+import {
+  buildCloudflareCredentials,
+  configureSesDnsInCloudflare,
+  type CloudflareCredentialsInput,
+} from "@/lib/cloudflare";
+import {
+  buildRoute53Config,
+  configureSesDnsInRoute53,
+  type Route53ConfigInput,
+} from "@/lib/route53";
 import { requireAuthenticatedUser, apiErrorResponse } from "@/lib/auth";
 
 function normalizeDomain(value: string | null | undefined): string {
@@ -46,6 +56,30 @@ function parseNamecheapInput(value: unknown): NamecheapCredentialsInput {
   };
 }
 
+function parseCloudflareInput(value: unknown): CloudflareCredentialsInput {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  const input = value as Record<string, unknown>;
+  return {
+    apiToken: typeof input.apiToken === "string" ? input.apiToken : undefined,
+    zoneId: typeof input.zoneId === "string" ? input.zoneId : undefined,
+  };
+}
+
+function parseRoute53Input(value: unknown): Route53ConfigInput {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  const input = value as Record<string, unknown>;
+  return {
+    hostedZoneId:
+      typeof input.hostedZoneId === "string" ? input.hostedZoneId : undefined,
+  };
+}
+
 function buildResolvedNamecheapCredentials(
   input: NamecheapCredentialsInput
 ) {
@@ -58,6 +92,38 @@ function buildResolvedNamecheapCredentials(
     clientIp: input.clientIp ?? process.env.NAMECHEAP_CLIENT_IP,
     useSandbox: input.useSandbox ?? envUseSandbox ?? false,
   });
+}
+
+function buildResolvedCloudflareCredentials(input: CloudflareCredentialsInput) {
+  return buildCloudflareCredentials({
+    apiToken: input.apiToken ?? process.env.CLOUDFLARE_API_TOKEN,
+    zoneId: input.zoneId ?? process.env.CLOUDFLARE_ZONE_ID,
+  });
+}
+
+function buildResolvedRoute53Config(input: Route53ConfigInput) {
+  return buildRoute53Config({
+    hostedZoneId: input.hostedZoneId ?? process.env.ROUTE53_HOSTED_ZONE_ID,
+  });
+}
+
+async function ensureSesDnsInputs(domain: string): Promise<{
+  verificationToken: string;
+  dkimTokens: string[];
+}> {
+  const status = await getDomainSetupStatus(domain);
+  const verificationToken = status.verificationToken ?? (await verifyDomain(domain));
+  if (!verificationToken) {
+    throw new Error("SES verification token is missing");
+  }
+
+  const dkimTokens =
+    status.dkimTokens.length > 0 ? status.dkimTokens : await setupDkim(domain);
+  if (dkimTokens.length === 0) {
+    throw new Error("SES DKIM tokens are missing");
+  }
+
+  return { verificationToken, dkimTokens };
 }
 
 async function checkSpf(domain: string): Promise<boolean> {
@@ -180,25 +246,9 @@ export async function POST(req: NextRequest) {
       case "configure-namecheap-dns": {
         const namecheapInput = parseNamecheapInput((body as Record<string, unknown>).namecheap);
         const credentials = buildResolvedNamecheapCredentials(namecheapInput);
-
-        const status = await getDomainSetupStatus(domain);
-        const verificationToken =
-          status.verificationToken ?? (await verifyDomain(domain));
-        if (!verificationToken) {
-          return NextResponse.json(
-            { error: "SES verification token is missing" },
-            { status: 500 }
-          );
-        }
-
-        const dkimTokens =
-          status.dkimTokens.length > 0 ? status.dkimTokens : await setupDkim(domain);
-        if (dkimTokens.length === 0) {
-          return NextResponse.json(
-            { error: "SES DKIM tokens are missing" },
-            { status: 500 }
-          );
-        }
+        const { verificationToken, dkimTokens } = await ensureSesDnsInputs(
+          domain
+        );
 
         const result = await configureSesDnsInNamecheap({
           domain,
@@ -207,6 +257,40 @@ export async function POST(req: NextRequest) {
           credentials,
         });
 
+        return NextResponse.json(result);
+      }
+      case "configure-cloudflare-dns": {
+        const cloudflareInput = parseCloudflareInput(
+          (body as Record<string, unknown>).cloudflare
+        );
+        const credentials = buildResolvedCloudflareCredentials(cloudflareInput);
+        const { verificationToken, dkimTokens } = await ensureSesDnsInputs(
+          domain
+        );
+
+        const result = await configureSesDnsInCloudflare({
+          domain,
+          verificationToken,
+          dkimTokens,
+          credentials,
+        });
+        return NextResponse.json(result);
+      }
+      case "configure-route53-dns": {
+        const route53Input = parseRoute53Input(
+          (body as Record<string, unknown>).route53
+        );
+        const config = buildResolvedRoute53Config(route53Input);
+        const { verificationToken, dkimTokens } = await ensureSesDnsInputs(
+          domain
+        );
+
+        const result = await configureSesDnsInRoute53({
+          domain,
+          verificationToken,
+          dkimTokens,
+          config,
+        });
         return NextResponse.json(result);
       }
       default:

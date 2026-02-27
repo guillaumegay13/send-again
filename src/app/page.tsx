@@ -34,6 +34,34 @@ interface Contact {
   fields: Record<string, string>;
 }
 
+interface ContactsBatchImportResponse {
+  ok: boolean;
+  imported: number;
+  skippedUnsubscribed: number;
+}
+
+interface CsvImportHeader {
+  index: number;
+  label: string;
+  normalizedKey: string;
+  selected: boolean;
+  targetField: string;
+}
+
+interface CsvImportConfig {
+  workspaceId: string;
+  fileName: string;
+  rowCount: number;
+  emailColumnIndex: number;
+  headers: CsvImportHeader[];
+}
+
+interface ParseCSVOptions {
+  emailColumnIndex?: number;
+  fieldMapByIndex?: Record<number, string>;
+  existingByEmail?: Map<string, Contact>;
+}
+
 interface EmailEvent {
   type: string;
   timestamp: string;
@@ -66,6 +94,8 @@ interface TopicDeliveryAnalytics {
 
 const HISTORY_RULES_PAGE_SIZE = 100;
 const HISTORY_TABLE_PAGE_SIZE = 25;
+const CONTACTS_TABLE_PAGE_SIZE = 200;
+const CONTACT_IMPORT_BATCH_SIZE = 1000;
 const NAMECHEAP_DNS_STORAGE_KEY = "send-again.namecheap-dns";
 
 interface SendJobStatusResponse {
@@ -136,6 +166,29 @@ interface NamecheapDnsSetupResult {
   appliedRecords: number;
 }
 
+interface CloudflareDnsConfig {
+  apiToken: string;
+  zoneId: string;
+}
+
+interface CloudflareDnsSetupResult {
+  zoneId: string;
+  zoneName: string;
+  appliedRecords: number;
+  changedRecords: number;
+}
+
+interface Route53DnsConfig {
+  hostedZoneId: string;
+}
+
+interface Route53DnsSetupResult {
+  hostedZoneId: string;
+  zoneName: string;
+  appliedRecords: number;
+  changedRecords: number;
+}
+
 type DnsProvider = "manual" | "namecheap" | "cloudflare" | "route53";
 
 type FieldOperator = "equals" | "notEquals" | "contains" | "notContains";
@@ -185,6 +238,8 @@ function isDnsProvider(value: unknown): value is DnsProvider {
 
 function loadPersistedDnsSetupState(): Partial<NamecheapDnsConfig> & {
   provider?: DnsProvider;
+  cloudflareZoneId?: string;
+  route53HostedZoneId?: string;
 } {
   if (typeof window === "undefined") return {};
 
@@ -198,6 +253,12 @@ function loadPersistedDnsSetupState(): Partial<NamecheapDnsConfig> & {
       username: typeof parsed.username === "string" ? parsed.username : "",
       clientIp: typeof parsed.clientIp === "string" ? parsed.clientIp : "",
       useSandbox: typeof parsed.useSandbox === "boolean" ? parsed.useSandbox : false,
+      cloudflareZoneId:
+        typeof parsed.cloudflareZoneId === "string" ? parsed.cloudflareZoneId : "",
+      route53HostedZoneId:
+        typeof parsed.route53HostedZoneId === "string"
+          ? parsed.route53HostedZoneId
+          : "",
     };
   } catch {
     return {};
@@ -607,42 +668,116 @@ function normalizeCSVValue(value: string): string {
     .replace(/^'+|'+$/g, "");
 }
 
-function parseCSV(text: string): Contact[] {
+function getCSVLines(text: string): string[] {
+  return text
+    .replace(/^\uFEFF/, "")
+    .split(/\r\n|\n|\r/)
+    .filter((line) => line.trim());
+}
+
+function getCSVSeparator(headerLine: string): string {
+  if (headerLine.includes("\t")) return "\t";
+  if (headerLine.includes(";")) return ";";
+  return ",";
+}
+
+function normalizeCSVHeader(value: string, fallbackIndex: number): string {
+  const normalized = normalizeCSVValue(value).toLowerCase();
+  if (normalized) return normalized;
+  return `field_${fallbackIndex + 1}`;
+}
+
+function findCSVEmailColumnIndex(headers: string[]): number {
+  const emailIdx = headers.findIndex(
+    (header) => header === "email" || header === "e-mail" || header === "mail"
+  );
+  return emailIdx >= 0 ? emailIdx : 0;
+}
+
+function createCSVImportConfig(
+  text: string,
+  workspaceId: string,
+  fileName: string
+): CsvImportConfig | null {
+  const lines = getCSVLines(text);
+  if (lines.length === 0) return null;
+
+  const separator = getCSVSeparator(lines[0]);
+  const headerLabels = parseDelimitedRow(lines[0], separator).map(normalizeCSVValue);
+  if (headerLabels.length === 0) return null;
+
+  const headers = headerLabels.map((label, index) => ({
+    index,
+    label: label || `Column ${index + 1}`,
+    normalizedKey: normalizeCSVHeader(label, index),
+    selected: true,
+    targetField: normalizeCSVHeader(label, index),
+  }));
+  const emailColumnIndex = findCSVEmailColumnIndex(
+    headers.map((header) => header.normalizedKey)
+  );
+  headers[emailColumnIndex].selected = false;
+
+  return {
+    workspaceId,
+    fileName,
+    rowCount: Math.max(0, lines.length - 1),
+    emailColumnIndex,
+    headers,
+  };
+}
+
+function parseCSV(text: string, options: ParseCSVOptions = {}): Contact[] {
   // Strip BOM and handle all line ending styles (\r\n, \n, \r)
-  const lines = text.replace(/^\uFEFF/, "").split(/\r\n|\n|\r/).filter((l) => l.trim());
+  const lines = getCSVLines(text);
   if (lines.length === 0) return [];
 
-  const sep = lines[0].includes("\t")
-    ? "\t"
-    : lines[0].includes(";")
-      ? ";"
-      : ",";
+  const sep = getCSVSeparator(lines[0]);
 
-  const headers = parseDelimitedRow(lines[0], sep).map((h) =>
-    normalizeCSVValue(h).toLowerCase()
+  const headers = parseDelimitedRow(lines[0], sep).map((header, index) =>
+    normalizeCSVHeader(header, index)
   );
 
-  // Find the email column
-  const emailIdx = headers.findIndex(
-    (h) => h === "email" || h === "e-mail" || h === "mail"
-  );
-  const eIdx = emailIdx >= 0 ? emailIdx : 0;
-
-  // All non-email columns become field keys
-  const fieldHeaders = headers
-    .map((h, i) => ({ header: h, index: i }))
-    .filter((_, i) => i !== eIdx);
+  const defaultEmailIndex = findCSVEmailColumnIndex(headers);
+  const requestedEmailIndex = options.emailColumnIndex;
+  const eIdx =
+    requestedEmailIndex != null &&
+    requestedEmailIndex >= 0 &&
+    requestedEmailIndex < headers.length
+      ? requestedEmailIndex
+      : defaultEmailIndex;
 
   const byEmail = new Map<string, Contact>();
+  const hasFieldMap = options.fieldMapByIndex != null;
   for (let i = 1; i < lines.length; i++) {
     const values = parseDelimitedRow(lines[i], sep).map(normalizeCSVValue);
-    const email = values[eIdx] ?? "";
+    const email = (values[eIdx] ?? "").trim().toLowerCase();
     if (!email) continue;
-    const fields: Record<string, string> = {};
-    for (const { header, index } of fieldHeaders) {
-      fields[header] = values[index] ?? "";
+
+    let target = byEmail.get(email);
+    if (!target) {
+      const existing = options.existingByEmail?.get(email);
+      target = {
+        email,
+        fields: existing ? { ...existing.fields } : {},
+      };
     }
-    byEmail.set(email, { email, fields });
+
+    for (let index = 0; index < headers.length; index++) {
+      if (index === eIdx) continue;
+
+      let fieldKey = headers[index];
+      if (hasFieldMap) {
+        const mapped = options.fieldMapByIndex?.[index];
+        if (typeof mapped !== "string") continue;
+        fieldKey = normalizeCSVValue(mapped).toLowerCase();
+        if (!fieldKey) continue;
+      }
+
+      target.fields[fieldKey] = values[index] ?? "";
+    }
+
+    byEmail.set(email, target);
   }
 
   return Array.from(byEmail.values());
@@ -694,6 +829,14 @@ export default function ComposePage() {
     {}
   );
   const [newContact, setNewContact] = useState("");
+  const [contactsImporting, setContactsImporting] = useState(false);
+  const [contactsImportMessage, setContactsImportMessage] = useState<string | null>(
+    null
+  );
+  const [contactsPage, setContactsPage] = useState(1);
+  const [csvImportConfig, setCsvImportConfig] = useState<CsvImportConfig | null>(
+    null
+  );
 
   const contacts = useMemo(
     () => (activeId ? contactsMap[activeId] ?? [] : []),
@@ -723,6 +866,7 @@ export default function ComposePage() {
     useState<ConditionMatchMode>("all");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const csvImportTextRef = useRef<string | null>(null);
 
   const [to, setTo] = useState("");
   const [subject, setSubject] = useState("");
@@ -767,7 +911,22 @@ export default function ComposePage() {
     clientIp: "",
     useSandbox: false,
   });
+  const [cloudflareConfig, setCloudflareConfig] = useState<CloudflareDnsConfig>({
+    apiToken: "",
+    zoneId: "",
+  });
+  const [route53Config, setRoute53Config] = useState<Route53DnsConfig>({
+    hostedZoneId: "",
+  });
   const [namecheapStatus, setNamecheapStatus] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
+  const [cloudflareStatus, setCloudflareStatus] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
+  const [route53Status, setRoute53Status] = useState<{
     type: "success" | "error";
     message: string;
   } | null>(null);
@@ -818,7 +977,18 @@ export default function ComposePage() {
     }
     setNamecheapConfig((current) => ({
       ...current,
-      ...persisted,
+      apiUser: persisted.apiUser ?? current.apiUser,
+      username: persisted.username ?? current.username,
+      clientIp: persisted.clientIp ?? current.clientIp,
+      useSandbox: persisted.useSandbox ?? current.useSandbox,
+    }));
+    setCloudflareConfig((current) => ({
+      ...current,
+      zoneId: persisted.cloudflareZoneId ?? current.zoneId,
+    }));
+    setRoute53Config((current) => ({
+      ...current,
+      hostedZoneId: persisted.route53HostedZoneId ?? current.hostedZoneId,
     }));
   }, []);
 
@@ -831,6 +1001,8 @@ export default function ComposePage() {
       username: namecheapConfig.username,
       clientIp: namecheapConfig.clientIp,
       useSandbox: namecheapConfig.useSandbox,
+      cloudflareZoneId: cloudflareConfig.zoneId,
+      route53HostedZoneId: route53Config.hostedZoneId,
     };
     window.localStorage.setItem(NAMECHEAP_DNS_STORAGE_KEY, JSON.stringify(payload));
   }, [
@@ -839,10 +1011,14 @@ export default function ComposePage() {
     namecheapConfig.username,
     namecheapConfig.clientIp,
     namecheapConfig.useSandbox,
+    cloudflareConfig.zoneId,
+    route53Config.hostedZoneId,
   ]);
 
   useEffect(() => {
     setNamecheapStatus(null);
+    setCloudflareStatus(null);
+    setRoute53Status(null);
   }, [dnsProvider]);
 
   const clearSettingsSavedResetTimer = useCallback(() => {
@@ -1008,6 +1184,11 @@ export default function ComposePage() {
       setWorkspaces([]);
       setActiveId(null);
       setContactsMap({});
+      setContactsPage(1);
+      setContactsImporting(false);
+      setContactsImportMessage(null);
+      setCsvImportConfig(null);
+      csvImportTextRef.current = null;
       setHistory([]);
       setHistoryRows([]);
       setHistoryTotal(0);
@@ -1021,6 +1202,8 @@ export default function ComposePage() {
       setTopicAnalytics(null);
       setHistoryLoading(false);
       setNamecheapStatus(null);
+      setCloudflareStatus(null);
+      setRoute53Status(null);
       return;
     }
 
@@ -1064,6 +1247,11 @@ export default function ComposePage() {
   }, [activeId, clearSettingsSavedResetTimer]);
 
   useEffect(() => {
+    setContactsPage(1);
+    setContactsImporting(false);
+    setContactsImportMessage(null);
+    setCsvImportConfig(null);
+    csvImportTextRef.current = null;
     setHistoryRows([]);
     setHistoryTotal(0);
     setHistoryPage(1);
@@ -1075,6 +1263,8 @@ export default function ComposePage() {
     setTopicAnalyticsError(null);
     setTopicAnalytics(null);
     setNamecheapStatus(null);
+    setCloudflareStatus(null);
+    setRoute53Status(null);
   }, [activeId]);
 
   useEffect(() => {
@@ -1265,6 +1455,14 @@ export default function ComposePage() {
     setNamecheapConfig((current) => ({ ...current, ...patch }));
   }
 
+  function updateCloudflareConfig(patch: Partial<CloudflareDnsConfig>) {
+    setCloudflareConfig((current) => ({ ...current, ...patch }));
+  }
+
+  function updateRoute53Config(patch: Partial<Route53DnsConfig>) {
+    setRoute53Config((current) => ({ ...current, ...patch }));
+  }
+
   async function configureNamecheapDns() {
     if (!workspace) return;
 
@@ -1306,6 +1504,95 @@ export default function ComposePage() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setNamecheapStatus({
+        type: "error",
+        message,
+      });
+    } finally {
+      setSetupActionLoading(null);
+    }
+  }
+
+  async function configureCloudflareDns() {
+    if (!workspace) return;
+
+    const payload = {
+      apiToken: cloudflareConfig.apiToken.trim(),
+      zoneId: cloudflareConfig.zoneId.trim(),
+    };
+
+    if (!payload.apiToken) {
+      setCloudflareStatus({
+        type: "error",
+        message: "Enter a Cloudflare API token before applying DNS.",
+      });
+      return;
+    }
+
+    setCloudflareStatus(null);
+    setSetupActionLoading("configure-cloudflare-dns");
+    try {
+      const result = await fetchJson<CloudflareDnsSetupResult>(
+        "/api/workspaces/setup",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            domain: workspace.id,
+            action: "configure-cloudflare-dns",
+            configSet: workspace.configSet,
+            cloudflare: payload,
+          }),
+        }
+      );
+
+      setCloudflareStatus({
+        type: "success",
+        message: `Synced ${result.appliedRecords} SES records in ${result.zoneName}. ${result.changedRecords} record(s) changed.`,
+      });
+      await fetchSetupStatus();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setCloudflareStatus({
+        type: "error",
+        message,
+      });
+    } finally {
+      setSetupActionLoading(null);
+    }
+  }
+
+  async function configureRoute53Dns() {
+    if (!workspace) return;
+
+    const payload = {
+      hostedZoneId: route53Config.hostedZoneId.trim(),
+    };
+
+    setRoute53Status(null);
+    setSetupActionLoading("configure-route53-dns");
+    try {
+      const result = await fetchJson<Route53DnsSetupResult>(
+        "/api/workspaces/setup",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            domain: workspace.id,
+            action: "configure-route53-dns",
+            configSet: workspace.configSet,
+            route53: payload,
+          }),
+        }
+      );
+
+      setRoute53Status({
+        type: "success",
+        message: `Synced ${result.appliedRecords} SES records in hosted zone ${result.zoneName}. ${result.changedRecords} record(s) changed.`,
+      });
+      await fetchSetupStatus();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setRoute53Status({
         type: "error",
         message,
       });
@@ -1403,6 +1690,8 @@ export default function ComposePage() {
     setBodyVibeStatus(null);
     setFooterVibeStatus(null);
     setNamecheapStatus(null);
+    setCloudflareStatus(null);
+    setRoute53Status(null);
   }
 
   async function addWorkspaceById(rawId: string) {
@@ -1654,26 +1943,187 @@ export default function ComposePage() {
     }
   }
 
+  function updateCsvEmailColumn(columnIndex: number) {
+    setCsvImportConfig((current) => {
+      if (!current) return current;
+      if (columnIndex < 0 || columnIndex >= current.headers.length) return current;
+
+      return {
+        ...current,
+        emailColumnIndex: columnIndex,
+        headers: current.headers.map((header) =>
+          header.index === columnIndex
+            ? { ...header, selected: false }
+            : header.index === current.emailColumnIndex
+              ? { ...header, selected: true }
+              : header
+        ),
+      };
+    });
+  }
+
+  function updateCsvColumnSelection(columnIndex: number, selected: boolean) {
+    setCsvImportConfig((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        headers: current.headers.map((header) =>
+          header.index === columnIndex
+            ? { ...header, selected }
+            : header
+        ),
+      };
+    });
+  }
+
+  function updateCsvColumnTarget(columnIndex: number, targetField: string) {
+    setCsvImportConfig((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        headers: current.headers.map((header) =>
+          header.index === columnIndex
+            ? { ...header, targetField }
+            : header
+        ),
+      };
+    });
+  }
+
+  function cancelCsvImportConfig() {
+    if (contactsImporting) return;
+    setCsvImportConfig(null);
+    csvImportTextRef.current = null;
+    setContactsImportMessage("CSV import cancelled.");
+  }
+
+  async function confirmCsvImport() {
+    const config = csvImportConfig;
+    const text = csvImportTextRef.current;
+    if (!sessionToken || !config || !text || contactsImporting) return;
+
+    setCsvImportConfig(null);
+    setContactsImporting(true);
+    setContactsImportMessage("Preparing contacts...");
+
+    try {
+      const existingByEmail = new Map(
+        contacts.map((contact) => [contact.email.trim().toLowerCase(), contact])
+      );
+      const fieldMapByIndex: Record<number, string> = {};
+      for (const header of config.headers) {
+        if (header.index === config.emailColumnIndex) continue;
+        if (!header.selected) continue;
+        const targetField = normalizeCSVValue(header.targetField).toLowerCase();
+        if (
+          !targetField ||
+          targetField === "email" ||
+          targetField === "e-mail" ||
+          targetField === "mail"
+        ) {
+          continue;
+        }
+        fieldMapByIndex[header.index] = targetField;
+      }
+
+      const parsed = parseCSV(text, {
+        emailColumnIndex: config.emailColumnIndex,
+        fieldMapByIndex,
+        existingByEmail,
+      });
+      if (parsed.length === 0) {
+        setContactsImportMessage("No valid contacts found in this CSV.");
+        return;
+      }
+
+      let imported = 0;
+      let skippedUnsubscribed = 0;
+      const totalChunks = Math.ceil(parsed.length / CONTACT_IMPORT_BATCH_SIZE);
+
+      for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+        const start = chunkIndex * CONTACT_IMPORT_BATCH_SIZE;
+        const chunk = parsed.slice(start, start + CONTACT_IMPORT_BATCH_SIZE);
+        setContactsImportMessage(
+          `Importing contacts (${chunkIndex + 1}/${totalChunks})...`
+        );
+
+        const response = await fetchJson<ContactsBatchImportResponse>(
+          "/api/contacts",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              workspace: config.workspaceId,
+              contacts: chunk,
+              returnContacts: false,
+            }),
+          }
+        );
+        imported += response.imported;
+        skippedUnsubscribed += response.skippedUnsubscribed;
+      }
+
+      const updated = await fetchJson<Contact[]>(
+        `/api/contacts?workspace=${encodeURIComponent(config.workspaceId)}`
+      );
+      setContactsMap((prev) => ({ ...prev, [config.workspaceId]: updated }));
+      setContactsPage(1);
+      setContactsImportMessage(
+        `Imported ${imported} contacts.${skippedUnsubscribed > 0 ? ` ${skippedUnsubscribed} unsubscribed skipped.` : ""}`
+      );
+    } catch (err) {
+      console.error("Failed to upload contacts:", err);
+      setContactsImportMessage(
+        err instanceof Error ? `Import failed: ${err.message}` : "Import failed."
+      );
+    } finally {
+      csvImportTextRef.current = null;
+      setContactsImporting(false);
+    }
+  }
+
   async function handleCSVUpload(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    if (!sessionToken || !file || !activeId) return;
+    const workspaceId = activeId;
+    if (!sessionToken || !file || !workspaceId || contactsImporting) return;
+
+    setCsvImportConfig(null);
+    csvImportTextRef.current = null;
+    setContactsImporting(true);
+    setContactsImportMessage("Reading CSV...");
     const reader = new FileReader();
-    reader.onload = async () => {
-      const parsed = parseCSV(reader.result as string);
-      // Merge: CSV rows overwrite existing by email
-      const newEmails = new Set(parsed.map((c) => c.email));
-      const kept = contacts.filter((c) => !newEmails.has(c.email));
-      setLocalContacts([...kept, ...parsed]);
+    reader.onload = () => {
       try {
-        const updated = await fetchJson<Contact[]>("/api/contacts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ workspace: activeId, contacts: parsed }),
-        });
-        setContactsMap((prev) => ({ ...prev, [activeId]: updated }));
+        const text = String(reader.result ?? "");
+        const config = createCSVImportConfig(text, workspaceId, file.name);
+        if (!config) {
+          csvImportTextRef.current = null;
+          setContactsImportMessage("Invalid CSV header.");
+          return;
+        }
+        if (config.rowCount === 0) {
+          csvImportTextRef.current = null;
+          setContactsImportMessage("No valid contacts found in this CSV.");
+          return;
+        }
+        csvImportTextRef.current = text;
+        setCsvImportConfig(config);
+        setContactsImportMessage(
+          `Loaded ${config.rowCount.toLocaleString()} rows from ${config.fileName}. Choose columns to import.`
+        );
       } catch (err) {
         console.error("Failed to upload contacts:", err);
+        csvImportTextRef.current = null;
+        setContactsImportMessage(
+          err instanceof Error ? `Import failed: ${err.message}` : "Import failed."
+        );
+      } finally {
+        setContactsImporting(false);
       }
+    };
+    reader.onerror = () => {
+      setContactsImporting(false);
+      setContactsImportMessage("Failed to read the selected file.");
     };
     reader.readAsText(file);
     e.target.value = "";
@@ -1691,11 +2141,51 @@ export default function ComposePage() {
     );
   }
 
+  const contactsTotalPages = Math.max(
+    1,
+    Math.ceil(contacts.length / CONTACTS_TABLE_PAGE_SIZE)
+  );
+  const contactsVisibleRows = useMemo(() => {
+    const start = (contactsPage - 1) * CONTACTS_TABLE_PAGE_SIZE;
+    return contacts.slice(start, start + CONTACTS_TABLE_PAGE_SIZE);
+  }, [contacts, contactsPage]);
+  const contactsRangeStart =
+    contacts.length > 0
+      ? (contactsPage - 1) * CONTACTS_TABLE_PAGE_SIZE + 1
+      : 0;
+  const contactsRangeEnd =
+    contacts.length > 0
+      ? contactsRangeStart + contactsVisibleRows.length - 1
+      : 0;
+
+  useEffect(() => {
+    if (contactsPage <= contactsTotalPages) return;
+    setContactsPage(contactsTotalPages);
+  }, [contactsPage, contactsTotalPages]);
+
   const allFieldKeys = useMemo(
     () =>
       Array.from(new Set(contacts.flatMap((c) => Object.keys(c.fields)))).sort(),
     [contacts]
   );
+  const csvImportTargetFieldOptions = useMemo(() => {
+    if (!csvImportConfig) return allFieldKeys;
+    const keys = new Set(allFieldKeys);
+    for (const header of csvImportConfig.headers) {
+      if (header.targetField.trim()) {
+        keys.add(header.targetField.trim().toLowerCase());
+      }
+      keys.add(header.normalizedKey);
+    }
+    return Array.from(keys).sort();
+  }, [allFieldKeys, csvImportConfig]);
+  const csvSelectedColumnCount = useMemo(() => {
+    if (!csvImportConfig) return 0;
+    return csvImportConfig.headers.filter(
+      (header) =>
+        header.index !== csvImportConfig.emailColumnIndex && header.selected
+    ).length;
+  }, [csvImportConfig]);
   const availableFieldKeys = useMemo(
     () => {
       const keys = new Set(["verified", ...allFieldKeys]);
@@ -2178,14 +2668,18 @@ export default function ComposePage() {
       ? "text-red-700"
       : "text-gray-500";
   const isNamecheapProvider = dnsProvider === "namecheap";
-  const isProviderAutoSyncComingSoon =
-    dnsProvider === "cloudflare" || dnsProvider === "route53";
+  const isCloudflareProvider = dnsProvider === "cloudflare";
+  const isRoute53Provider = dnsProvider === "route53";
   const namecheapApplyBusy = setupActionLoading === "configure-namecheap-dns";
+  const cloudflareApplyBusy = setupActionLoading === "configure-cloudflare-dns";
+  const route53ApplyBusy = setupActionLoading === "configure-route53-dns";
   const isNamecheapConfigComplete =
     namecheapConfig.apiUser.trim().length > 0 &&
     namecheapConfig.username.trim().length > 0 &&
     namecheapConfig.apiKey.trim().length > 0 &&
     namecheapConfig.clientIp.trim().length > 0;
+  const isCloudflareConfigComplete =
+    cloudflareConfig.apiToken.trim().length > 0;
 
   return (
     <div className="flex h-screen">
@@ -2745,9 +3239,14 @@ export default function ComposePage() {
               />
               <button
                 onClick={() => fileInputRef.current?.click()}
-                className="border border-gray-300 rounded px-4 py-2 text-sm font-medium hover:bg-gray-100"
+                disabled={contactsImporting}
+                className={`border border-gray-300 rounded px-4 py-2 text-sm font-medium ${
+                  contactsImporting
+                    ? "cursor-not-allowed opacity-60"
+                    : "hover:bg-gray-100"
+                }`}
               >
-                Upload CSV
+                {contactsImporting ? "Uploading..." : "Upload CSV"}
               </button>
               {contacts.length > 0 && (
                 <button
@@ -2770,6 +3269,9 @@ export default function ComposePage() {
                 </button>
               )}
             </div>
+            {contactsImportMessage && (
+              <p className="mb-4 text-xs text-gray-500">{contactsImportMessage}</p>
+            )}
 
             {/* Contact table */}
             {contacts.length === 0 ? (
@@ -2800,7 +3302,7 @@ export default function ComposePage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {contacts.map((c) => (
+                      {contactsVisibleRows.map((c) => (
                         <tr
                           key={c.email}
                           className="border-b border-gray-100 last:border-0 hover:bg-gray-50"
@@ -2834,10 +3336,46 @@ export default function ComposePage() {
                     </tbody>
                   </table>
                 </div>
-                <p className="text-xs text-gray-400 mt-3">
-                  {contacts.length} contact
-                  {contacts.length !== 1 && "s"}
-                </p>
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-gray-400">
+                  <p>
+                    Showing {contactsRangeStart}-{contactsRangeEnd} of {contacts.length}{" "}
+                    contact
+                    {contacts.length !== 1 && "s"}
+                  </p>
+                  {contactsTotalPages > 1 && (
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setContactsPage((page) => Math.max(1, page - 1))}
+                        disabled={contactsPage <= 1}
+                        className={`rounded border px-2 py-1 ${
+                          contactsPage <= 1
+                            ? "cursor-not-allowed border-gray-200 text-gray-300"
+                            : "border-gray-300 text-gray-600 hover:bg-gray-50"
+                        }`}
+                      >
+                        Prev
+                      </button>
+                      <span>
+                        Page {contactsPage}/{contactsTotalPages}
+                      </span>
+                      <button
+                        onClick={() =>
+                          setContactsPage((page) =>
+                            Math.min(contactsTotalPages, page + 1)
+                          )
+                        }
+                        disabled={contactsPage >= contactsTotalPages}
+                        className={`rounded border px-2 py-1 ${
+                          contactsPage >= contactsTotalPages
+                            ? "cursor-not-allowed border-gray-200 text-gray-300"
+                            : "border-gray-300 text-gray-600 hover:bg-gray-50"
+                        }`}
+                      >
+                        Next
+                      </button>
+                    </div>
+                  )}
+                </div>
               </>
             )}
           </div>
@@ -3112,20 +3650,14 @@ export default function ComposePage() {
                     >
                       <option value="manual">Manual DNS</option>
                       <option value="namecheap">Namecheap</option>
-                      <option value="cloudflare">Cloudflare (coming soon)</option>
-                      <option value="route53">Amazon Route 53 (coming soon)</option>
+                      <option value="cloudflare">Cloudflare</option>
+                      <option value="route53">Amazon Route 53</option>
                     </select>
                     <span className="text-[11px] text-gray-500">
                       Choose where DNS should be managed for this domain.
                     </span>
                   </label>
                 </div>
-
-                {isProviderAutoSyncComingSoon && (
-                  <p className="rounded border border-blue-200 bg-blue-50 px-3 py-2 text-[11px] text-blue-700">
-                    Auto-sync for this provider is coming soon. Use the manual records below for now.
-                  </p>
-                )}
 
                 {isNamecheapProvider && (
                   <div className="rounded border border-gray-200 bg-white p-3">
@@ -3218,6 +3750,112 @@ export default function ComposePage() {
                         }`}
                       >
                         {namecheapStatus.message}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {isCloudflareProvider && (
+                  <div className="rounded border border-gray-200 bg-white p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm text-gray-700 font-medium">Auto-configure DNS in Cloudflare</p>
+                        <p className="mt-1 text-xs text-gray-500">
+                          Uses Cloudflare API to apply SES verification, DKIM, SPF, and DMARC.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void configureCloudflareDns()}
+                        disabled={cloudflareApplyBusy || !isCloudflareConfigComplete}
+                        className="shrink-0 rounded border border-gray-300 bg-white px-2 py-1 text-[11px] font-medium hover:bg-gray-100 disabled:opacity-50"
+                      >
+                        {cloudflareApplyBusy ? "Applying..." : "Apply in Cloudflare"}
+                      </button>
+                    </div>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      <label className="flex flex-col gap-1 sm:col-span-2">
+                        <span className="text-[11px] text-gray-500">API Token</span>
+                        <input
+                          type="password"
+                          value={cloudflareConfig.apiToken}
+                          onChange={(event) =>
+                            updateCloudflareConfig({ apiToken: event.target.value })
+                          }
+                          autoComplete="off"
+                          placeholder="Cloudflare token with Zone:Read and DNS:Edit"
+                          className="border border-gray-300 rounded px-2 py-1 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-black"
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1 sm:col-span-2">
+                        <span className="text-[11px] text-gray-500">Zone ID (optional)</span>
+                        <input
+                          type="text"
+                          value={cloudflareConfig.zoneId}
+                          onChange={(event) =>
+                            updateCloudflareConfig({ zoneId: event.target.value })
+                          }
+                          placeholder="If empty, zone is auto-detected from the domain"
+                          className="border border-gray-300 rounded px-2 py-1 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-black"
+                        />
+                      </label>
+                    </div>
+                    <p className="mt-1 text-[11px] text-gray-400">
+                      API token is used only for the apply action and is not saved to local storage.
+                    </p>
+                    {cloudflareStatus && (
+                      <p
+                        className={`mt-2 rounded border px-2 py-1 text-[11px] ${
+                          cloudflareStatus.type === "success"
+                            ? "border-green-200 bg-green-50 text-green-700"
+                            : "border-red-200 bg-red-50 text-red-700"
+                        }`}
+                      >
+                        {cloudflareStatus.message}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {isRoute53Provider && (
+                  <div className="rounded border border-gray-200 bg-white p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm text-gray-700 font-medium">Auto-configure DNS in Route 53</p>
+                        <p className="mt-1 text-xs text-gray-500">
+                          Uses current AWS credentials to apply SES records in Route 53.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void configureRoute53Dns()}
+                        disabled={route53ApplyBusy}
+                        className="shrink-0 rounded border border-gray-300 bg-white px-2 py-1 text-[11px] font-medium hover:bg-gray-100 disabled:opacity-50"
+                      >
+                        {route53ApplyBusy ? "Applying..." : "Apply in Route 53"}
+                      </button>
+                    </div>
+                    <label className="mt-3 flex flex-col gap-1">
+                      <span className="text-[11px] text-gray-500">Hosted Zone ID (optional)</span>
+                      <input
+                        type="text"
+                        value={route53Config.hostedZoneId}
+                        onChange={(event) =>
+                          updateRoute53Config({ hostedZoneId: event.target.value })
+                        }
+                        placeholder="If empty, the best matching hosted zone is auto-detected"
+                        className="border border-gray-300 rounded px-2 py-1 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-black"
+                      />
+                    </label>
+                    {route53Status && (
+                      <p
+                        className={`mt-2 rounded border px-2 py-1 text-[11px] ${
+                          route53Status.type === "success"
+                            ? "border-green-200 bg-green-50 text-green-700"
+                            : "border-red-200 bg-red-50 text-red-700"
+                        }`}
+                      >
+                        {route53Status.message}
                       </p>
                     )}
                   </div>
@@ -3720,6 +4358,132 @@ export default function ComposePage() {
           </div>
         )}
       </div>
+
+      {csvImportConfig && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="csv-import-title"
+            className="w-full max-w-3xl rounded-lg bg-white shadow-xl"
+          >
+            <div className="border-b border-gray-200 px-5 py-4">
+              <h2 id="csv-import-title" className="text-base font-semibold text-gray-900">
+                Configure CSV Import
+              </h2>
+              <p className="mt-1 text-xs text-gray-500">
+                {csvImportConfig.fileName} · {csvImportConfig.rowCount.toLocaleString()} rows
+              </p>
+            </div>
+
+            <div className="max-h-[70vh] overflow-y-auto px-5 py-4">
+              <label className="mb-4 flex flex-col gap-1">
+                <span className="text-xs font-medium uppercase tracking-wide text-gray-500">
+                  Email Column
+                </span>
+                <select
+                  value={String(csvImportConfig.emailColumnIndex)}
+                  onChange={(event) => updateCsvEmailColumn(Number(event.target.value))}
+                  className="w-full rounded border border-gray-300 px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
+                >
+                  {csvImportConfig.headers.map((header) => (
+                    <option key={header.index} value={String(header.index)}>
+                      {header.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <p className="mb-2 text-xs text-gray-500">
+                Select columns to import and map them to existing fields.
+              </p>
+              <div className="overflow-x-auto rounded border border-gray-200">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
+                      <th className="px-3 py-2 text-left">CSV column</th>
+                      <th className="px-3 py-2 text-left">Import</th>
+                      <th className="px-3 py-2 text-left">Map to field</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {csvImportConfig.headers.map((header) => {
+                      const isEmailColumn = header.index === csvImportConfig.emailColumnIndex;
+                      const selectValue = header.targetField.trim().toLowerCase();
+
+                      return (
+                        <tr key={header.index} className="border-t border-gray-100">
+                          <td className="px-3 py-2 font-mono text-xs text-gray-700">
+                            {header.label}
+                          </td>
+                          <td className="px-3 py-2">
+                            <label className="inline-flex items-center gap-2 text-xs text-gray-600">
+                              <input
+                                type="checkbox"
+                                checked={isEmailColumn ? false : header.selected}
+                                onChange={(event) =>
+                                  updateCsvColumnSelection(header.index, event.target.checked)
+                                }
+                                disabled={isEmailColumn}
+                                className="h-4 w-4 rounded border-gray-300 text-black focus:ring-black disabled:opacity-50"
+                              />
+                              {isEmailColumn ? "Email column" : "Import"}
+                            </label>
+                          </td>
+                          <td className="px-3 py-2">
+                            <select
+                              value={selectValue}
+                              onChange={(event) =>
+                                updateCsvColumnTarget(header.index, event.target.value)
+                              }
+                              disabled={isEmailColumn || !header.selected}
+                              className="w-full rounded border border-gray-300 px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-black disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              <option value={header.normalizedKey}>
+                                {header.normalizedKey}
+                              </option>
+                              {csvImportTargetFieldOptions
+                                .filter((field) => field !== header.normalizedKey)
+                                .map((field) => (
+                                  <option key={field} value={field}>
+                                    {field}
+                                  </option>
+                                ))}
+                            </select>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <p className="mt-3 text-xs text-gray-500">
+                {csvSelectedColumnCount} column{csvSelectedColumnCount !== 1 && "s"} selected. Existing
+                contacts keep unmapped fields and merge on email match.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-gray-200 px-5 py-4">
+              <button
+                type="button"
+                onClick={cancelCsvImportConfig}
+                disabled={contactsImporting}
+                className="rounded border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmCsvImport()}
+                disabled={contactsImporting}
+                className="rounded bg-black px-3 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {contactsImporting ? "Importing..." : "Import contacts"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
