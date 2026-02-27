@@ -246,6 +246,10 @@ interface WorkspaceMembershipRow {
   workspace_id: string;
 }
 
+interface WorkspaceOwnerMembershipRow {
+  workspace_id: string;
+}
+
 export async function ensureWorkspaceMemberships(
   userId: string,
   workspaceIds: string[],
@@ -296,6 +300,129 @@ export async function userCanAccessWorkspace(
     .limit(1);
   assertNoError(error, "Failed to check workspace access");
   return (data ?? []).length > 0;
+}
+
+export async function userIsWorkspaceOwner(
+  userId: string,
+  workspaceId: string
+): Promise<boolean> {
+  const db = getDb();
+  const { data, error } = await db
+    .from("workspace_memberships")
+    .select("workspace_id")
+    .eq("user_id", userId)
+    .eq("workspace_id", workspaceId)
+    .eq("role", "owner")
+    .limit(1);
+  assertNoError(error, "Failed to check workspace ownership");
+  const rows = (data ?? []) as WorkspaceOwnerMembershipRow[];
+  return rows.length > 0;
+}
+
+export async function deleteWorkspaceData(workspaceId: string): Promise<void> {
+  const db = getDb();
+  const pageSize = 1000;
+  const messageIds: string[] = [];
+  let from = 0;
+
+  // Collect send message IDs before deleting workspace sends, then remove linked events.
+  while (true) {
+    const { data, error } = await db
+      .from("sends")
+      .select("message_id")
+      .eq("workspace_id", workspaceId)
+      .order("id", { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (isMissingTableError(error, "sends")) {
+      break;
+    }
+    assertNoError(error, "Failed to list workspace sends for deletion");
+
+    const rows = (data ?? []) as Array<{ message_id: string }>;
+    if (rows.length === 0) break;
+
+    for (const row of rows) {
+      const messageId = String(row.message_id ?? "").trim();
+      if (messageId) {
+        messageIds.push(messageId);
+      }
+    }
+
+    from += rows.length;
+    if (rows.length < pageSize) break;
+  }
+
+  const uniqueMessageIds = Array.from(new Set(messageIds));
+  for (const chunk of chunkArray(uniqueMessageIds, 1000)) {
+    if (chunk.length === 0) continue;
+    const { error } = await db
+      .from("email_events")
+      .delete()
+      .in("message_id", chunk);
+    if (isMissingTableError(error, "email_events")) {
+      break;
+    }
+    assertNoError(error, "Failed to delete workspace email events");
+  }
+
+  const { error: sendsError } = await db
+    .from("sends")
+    .delete()
+    .eq("workspace_id", workspaceId);
+  if (!isMissingTableError(sendsError, "sends")) {
+    assertNoError(sendsError, "Failed to delete workspace sends");
+  }
+
+  const { error: sendJobsError } = await db
+    .from("send_jobs")
+    .delete()
+    .eq("workspace_id", workspaceId);
+  if (!isMissingTableError(sendJobsError, "send_jobs")) {
+    assertNoError(sendJobsError, "Failed to delete workspace send jobs");
+  }
+
+  const { error: contactsError } = await db
+    .from("contacts")
+    .delete()
+    .eq("workspace_id", workspaceId);
+  if (!isMissingTableError(contactsError, "contacts")) {
+    assertNoError(contactsError, "Failed to delete workspace contacts");
+  }
+
+  const { error: unsubscribesError } = await db
+    .from("contact_unsubscribes")
+    .delete()
+    .eq("workspace_id", workspaceId);
+  if (!isMissingTableError(unsubscribesError, "contact_unsubscribes")) {
+    assertNoError(
+      unsubscribesError,
+      "Failed to delete workspace contact unsubscribes"
+    );
+  }
+
+  const { error: apiKeysError } = await db
+    .from("api_keys")
+    .delete()
+    .eq("workspace_id", workspaceId);
+  if (!isMissingTableError(apiKeysError, "api_keys")) {
+    assertNoError(apiKeysError, "Failed to delete workspace API keys");
+  }
+
+  const { error: settingsError } = await db
+    .from("workspace_settings")
+    .delete()
+    .eq("id", workspaceId);
+  if (!isMissingTableError(settingsError, "workspace_settings")) {
+    assertNoError(settingsError, "Failed to delete workspace settings");
+  }
+
+  const { error: membershipsError } = await db
+    .from("workspace_memberships")
+    .delete()
+    .eq("workspace_id", workspaceId);
+  if (!isMissingTableError(membershipsError, "workspace_memberships")) {
+    assertNoError(membershipsError, "Failed to delete workspace memberships");
+  }
 }
 
 // --- Contacts ---
@@ -733,6 +860,15 @@ export interface TopicDeliveryAnalytics {
   deliveryRate: number;
 }
 
+export interface SubjectCampaignAnalytics {
+  subject: string;
+  totalSends: number;
+  openedSends: number;
+  clickedSends: number;
+  openRate: number;
+  ctr: number;
+}
+
 interface SendRow {
   message_id: string;
   recipient: string;
@@ -750,6 +886,8 @@ interface EventRow {
   timestamp: string;
   detail: string | null;
 }
+
+const MESSAGE_ID_IN_QUERY_CHUNK_SIZE = 50;
 
 function normalizeHistoryPage(value: unknown): number {
   const parsed = Number(value);
@@ -770,6 +908,11 @@ function normalizeHistorySearch(value: unknown): string {
     .slice(0, 120)
     .replace(/[^a-zA-Z0-9@._+\-\s]/g, " ")
     .replace(/\s+/g, " ");
+}
+
+function normalizeSubject(value: string | null): string {
+  const normalized = (value ?? "").trim();
+  return normalized || "(No subject)";
 }
 
 export async function getSendHistory(
@@ -943,7 +1086,10 @@ export async function getTopicDeliveryAnalytics(
   }
 
   const deliveredMessageIds = new Set<string>();
-  const eventIdChunks = chunkArray(uniqueMessageIds, 1000);
+  const eventIdChunks = chunkArray(
+    uniqueMessageIds,
+    MESSAGE_ID_IN_QUERY_CHUNK_SIZE
+  );
   for (const ids of eventIdChunks) {
     if (ids.length === 0) continue;
     const { data: eventsData, error: eventsError } = await db
@@ -970,6 +1116,120 @@ export async function getTopicDeliveryAnalytics(
     undeliveredSends,
     deliveryRate: totalSends > 0 ? deliveredSends / totalSends : 0,
   };
+}
+
+export async function getSubjectCampaignAnalytics(
+  workspaceId: string,
+  options: { limit?: number } = {}
+): Promise<SubjectCampaignAnalytics[]> {
+  const db = getDb();
+  const pageSize = 1000;
+  const normalizedLimit = Math.max(
+    1,
+    Math.min(200, Math.floor(options.limit ?? 50))
+  );
+
+  const aggregates = new Map<
+    string,
+    {
+      subject: string;
+      totalSends: number;
+      openedSends: number;
+      clickedSends: number;
+      latestSentAt: number;
+    }
+  >();
+
+  let from = 0;
+  while (true) {
+    const { data: sendsData, error: sendsError } = await db
+      .from("sends")
+      .select("message_id, subject, sent_at")
+      .eq("workspace_id", workspaceId)
+      .order("sent_at", { ascending: false })
+      .range(from, from + pageSize - 1);
+    assertNoError(sendsError, "Failed to fetch sends for subject analytics");
+
+    const sends = (sendsData ?? []) as SendRow[];
+    if (sends.length === 0) break;
+
+    const messageIds = sends.map((row) => row.message_id).filter(Boolean);
+    const byMessageId = new Map<string, { opened: boolean; clicked: boolean }>();
+
+    for (
+      const ids of chunkArray(messageIds, MESSAGE_ID_IN_QUERY_CHUNK_SIZE)
+    ) {
+      if (ids.length === 0) continue;
+      const { data: eventsData, error: eventsError } = await db
+        .from("email_events")
+        .select("message_id, event_type")
+        .in("message_id", ids);
+      assertNoError(eventsError, "Failed to fetch events for subject analytics");
+
+      for (const row of (eventsData ?? []) as Array<{
+        message_id: string;
+        event_type: string | null;
+      }>) {
+        const messageId = row.message_id?.trim();
+        if (!messageId) continue;
+        const eventType = (row.event_type ?? "").trim().toLowerCase();
+
+        const entry = byMessageId.get(messageId) ?? {
+          opened: false,
+          clicked: false,
+        };
+        if (eventType === "open") {
+          entry.opened = true;
+        } else if (eventType === "click") {
+          entry.clicked = true;
+        }
+        byMessageId.set(messageId, entry);
+      }
+    }
+
+    for (const send of sends) {
+      const subject = normalizeSubject(send.subject);
+      const current = aggregates.get(subject) ?? {
+        subject,
+        totalSends: 0,
+        openedSends: 0,
+        clickedSends: 0,
+        latestSentAt: 0,
+      };
+      current.totalSends += 1;
+
+      const messageState = byMessageId.get(send.message_id);
+      if (messageState?.opened) current.openedSends += 1;
+      if (messageState?.clicked) current.clickedSends += 1;
+
+      const sentAtTs = Date.parse(send.sent_at);
+      if (Number.isFinite(sentAtTs) && sentAtTs > current.latestSentAt) {
+        current.latestSentAt = sentAtTs;
+      }
+
+      aggregates.set(subject, current);
+    }
+
+    from += sends.length;
+    if (sends.length < pageSize) break;
+  }
+
+  return Array.from(aggregates.values())
+    .sort(
+      (a, b) =>
+        b.latestSentAt - a.latestSentAt ||
+        b.totalSends - a.totalSends ||
+        a.subject.localeCompare(b.subject)
+    )
+    .slice(0, normalizedLimit)
+    .map(({ subject, totalSends, openedSends, clickedSends }) => ({
+      subject,
+      totalSends,
+      openedSends,
+      clickedSends,
+      openRate: totalSends > 0 ? openedSends / totalSends : 0,
+      ctr: totalSends > 0 ? clickedSends / totalSends : 0,
+    }));
 }
 
 export type SendJobStatus =

@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listVerifiedDomains } from "@/lib/ses";
 import {
+  deleteWorkspaceData,
   ensureWorkspaceMemberships,
   getAllWorkspaceSettings,
   getWorkspaceIdsForUser,
   getWorkspaceSettings,
+  userIsWorkspaceOwner,
 } from "@/lib/db";
 import {
   apiErrorResponse,
@@ -104,5 +106,33 @@ export async function POST(req: NextRequest) {
     });
   } catch (err) {
     return apiErrorResponse(err, "Failed to add workspace");
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const user = await requireAuthenticatedUser(req);
+    const workspaceId = normalizeWorkspaceId(
+      req.nextUrl.searchParams.get("id")
+    );
+    if (!workspaceId) {
+      return NextResponse.json(
+        { error: "id must look like a domain (e.g. example.com)" },
+        { status: 400 }
+      );
+    }
+
+    const isOwner = await userIsWorkspaceOwner(user.id, workspaceId);
+    if (!isOwner) {
+      return NextResponse.json(
+        { error: "Only workspace owners can delete a workspace" },
+        { status: 403 }
+      );
+    }
+
+    await deleteWorkspaceData(workspaceId);
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    return apiErrorResponse(err, "Failed to delete workspace");
   }
 }

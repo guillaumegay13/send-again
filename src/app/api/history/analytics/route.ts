@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTopicDeliveryAnalytics, userCanAccessWorkspace } from "@/lib/db";
+import {
+  getSubjectCampaignAnalytics,
+  getTopicDeliveryAnalytics,
+  userCanAccessWorkspace,
+} from "@/lib/db";
 import { apiErrorResponse, requireAuthenticatedUser } from "@/lib/auth";
 
 export async function GET(req: NextRequest) {
@@ -13,17 +17,25 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    const hasAccess = await userCanAccessWorkspace(user.id, workspace);
+    if (!hasAccess) {
+      return NextResponse.json({ error: "Workspace not found" }, { status: 403 });
+    }
+
+    const mode = req.nextUrl.searchParams.get("mode");
+    if (mode === "subject") {
+      const limitValue = Number(req.nextUrl.searchParams.get("limit") ?? "50");
+      const limit = Number.isFinite(limitValue) ? limitValue : 50;
+      const items = await getSubjectCampaignAnalytics(workspace, { limit });
+      return NextResponse.json({ items });
+    }
+
     const topic = req.nextUrl.searchParams.get("topic") ?? "";
     if (!topic.trim()) {
       return NextResponse.json(
         { error: "Missing topic parameter" },
         { status: 400 }
       );
-    }
-
-    const hasAccess = await userCanAccessWorkspace(user.id, workspace);
-    if (!hasAccess) {
-      return NextResponse.json({ error: "Workspace not found" }, { status: 403 });
     }
 
     const analytics = await getTopicDeliveryAnalytics(workspace, topic);

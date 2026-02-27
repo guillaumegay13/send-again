@@ -1,7 +1,8 @@
 "use client";
 
 import { ChangeEvent, useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
+import { FancySelect } from "@/components/ui/fancy-select";
+import { AppSidebar } from "@/components/ui/app-sidebar";
 
 const dagre = require("dagre");
 
@@ -843,17 +844,17 @@ function RulesEditor({
   }
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+    <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs font-medium text-slate-700">Rules</p>
+        <p className="text-xs font-medium text-gray-700">Rules</p>
         <div className="flex flex-wrap items-center gap-1">
           <button
             type="button"
             onClick={() => onChangeMatchMode("all")}
             className={`rounded-full border px-2 py-1 text-[11px] ${
               matchMode === "all"
-                ? "border-slate-900 bg-slate-900 text-white"
-                : "border-slate-300 bg-white text-slate-700"
+                ? "border-gray-900 bg-gray-900 text-white"
+                : "border-gray-300 bg-white text-gray-700"
             }`}
           >
             Match all
@@ -863,8 +864,8 @@ function RulesEditor({
             onClick={() => onChangeMatchMode("any")}
             className={`rounded-full border px-2 py-1 text-[11px] ${
               matchMode === "any"
-                ? "border-slate-900 bg-slate-900 text-white"
-                : "border-slate-300 bg-white text-slate-700"
+                ? "border-gray-900 bg-gray-900 text-white"
+                : "border-gray-300 bg-white text-gray-700"
             }`}
           >
             Match any
@@ -872,14 +873,14 @@ function RulesEditor({
           <button
             type="button"
             onClick={() => onChangeConditions([...conditions, makeFieldCondition(fieldKeys[0] ?? "verified")])}
-            className="rounded-full border border-slate-300 bg-white px-2 py-1 text-[11px] text-slate-700"
+            className="rounded-full border border-gray-300 bg-white px-2 py-1 text-[11px] text-gray-700"
           >
             + Field
           </button>
           <button
             type="button"
             onClick={() => onChangeConditions([...conditions, makeHistoryCondition("", "open", "exact")])}
-            className="rounded-full border border-slate-300 bg-white px-2 py-1 text-[11px] text-slate-700"
+            className="rounded-full border border-gray-300 bg-white px-2 py-1 text-[11px] text-gray-700"
           >
             + History
           </button>
@@ -887,11 +888,11 @@ function RulesEditor({
       </div>
 
       {conditions.length === 0 ? (
-        <p className="mt-2 text-xs text-slate-500">No rules yet.</p>
+        <p className="mt-2 text-xs text-gray-500">No rules yet.</p>
       ) : (
         <div className="mt-2 space-y-2">
           {conditions.map((condition) => (
-            <div key={condition.id} className="rounded-lg border border-slate-200 bg-white p-2.5">
+            <div key={condition.id} className="rounded-lg border border-gray-200 bg-white p-2.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-1">
                   <button
@@ -904,8 +905,8 @@ function RulesEditor({
                     }
                     className={`rounded-full border px-2 py-0.5 text-[11px] ${
                       condition.kind === "field"
-                        ? "border-slate-900 bg-slate-900 text-white"
-                        : "border-slate-300 bg-white text-slate-700"
+                        ? "border-gray-900 bg-gray-900 text-white"
+                        : "border-gray-300 bg-white text-gray-700"
                     }`}
                   >
                     Field
@@ -917,8 +918,8 @@ function RulesEditor({
                     }
                     className={`rounded-full border px-2 py-0.5 text-[11px] ${
                       condition.kind === "history"
-                        ? "border-slate-900 bg-slate-900 text-white"
-                        : "border-slate-300 bg-white text-slate-700"
+                        ? "border-gray-900 bg-gray-900 text-white"
+                        : "border-gray-300 bg-white text-gray-700"
                     }`}
                   >
                     History
@@ -936,21 +937,22 @@ function RulesEditor({
               {condition.kind === "field" ? (
                 <div className="mt-2 grid gap-2 sm:grid-cols-3">
                   <label className="space-y-1 block">
-                    <span className="text-[11px] text-slate-500">Field</span>
+                    <span className="text-[11px] text-gray-500">Field</span>
                     <input
                       list={fieldDatalistId}
                       value={condition.field}
                       onChange={(event: ChangeEvent<HTMLInputElement>) =>
                         patchCondition(condition.id, { field: event.target.value })
                       }
-                      className="w-full rounded border border-slate-300 px-2 py-1 text-xs"
+                      className="w-full rounded border border-gray-300 px-2 py-1 text-xs"
                       placeholder="verified"
                     />
                   </label>
                   <label className="space-y-1 block">
-                    <span className="text-[11px] text-slate-500">Operator</span>
-                    <select
-                      className="w-full rounded border border-slate-300 px-2 py-1 text-xs"
+                    <span className="text-[11px] text-gray-500">Operator</span>
+                    <FancySelect
+                      wrapperClassName="w-full"
+                      className="h-8 border-gray-300 text-xs"
                       value={condition.operator}
                       onChange={(event: ChangeEvent<HTMLSelectElement>) =>
                         patchCondition(condition.id, {
@@ -963,16 +965,16 @@ function RulesEditor({
                           {option.label}
                         </option>
                       ))}
-                    </select>
+                    </FancySelect>
                   </label>
                   <label className="space-y-1 block">
-                    <span className="text-[11px] text-slate-500">Value</span>
+                    <span className="text-[11px] text-gray-500">Value</span>
                     <input
                       value={condition.value}
                       onChange={(event: ChangeEvent<HTMLInputElement>) =>
                         patchCondition(condition.id, { value: event.target.value })
                       }
-                      className="w-full rounded border border-slate-300 px-2 py-1 text-xs"
+                      className="w-full rounded border border-gray-300 px-2 py-1 text-xs"
                       placeholder="true"
                     />
                   </label>
@@ -980,21 +982,22 @@ function RulesEditor({
               ) : (
                 <div className="mt-2 grid gap-2 sm:grid-cols-3">
                   <label className="space-y-1 block">
-                    <span className="text-[11px] text-slate-500">Subject</span>
+                    <span className="text-[11px] text-gray-500">Subject</span>
                     <input
                       list={subjectDatalistId}
                       value={condition.subject}
                       onChange={(event: ChangeEvent<HTMLInputElement>) =>
                         patchCondition(condition.id, { subject: event.target.value })
                       }
-                      className="w-full rounded border border-slate-300 px-2 py-1 text-xs"
+                      className="w-full rounded border border-gray-300 px-2 py-1 text-xs"
                       placeholder="Welcome!"
                     />
                   </label>
                   <label className="space-y-1 block">
-                    <span className="text-[11px] text-slate-500">Match</span>
-                    <select
-                      className="w-full rounded border border-slate-300 px-2 py-1 text-xs"
+                    <span className="text-[11px] text-gray-500">Match</span>
+                    <FancySelect
+                      wrapperClassName="w-full"
+                      className="h-8 border-gray-300 text-xs"
                       value={condition.subjectMatch}
                       onChange={(event: ChangeEvent<HTMLSelectElement>) =>
                         patchCondition(condition.id, {
@@ -1007,12 +1010,13 @@ function RulesEditor({
                           {option.label}
                         </option>
                       ))}
-                    </select>
+                    </FancySelect>
                   </label>
                   <label className="space-y-1 block">
-                    <span className="text-[11px] text-slate-500">Event</span>
-                    <select
-                      className="w-full rounded border border-slate-300 px-2 py-1 text-xs"
+                    <span className="text-[11px] text-gray-500">Event</span>
+                    <FancySelect
+                      wrapperClassName="w-full"
+                      className="h-8 border-gray-300 text-xs"
                       value={condition.eventType}
                       onChange={(event: ChangeEvent<HTMLSelectElement>) =>
                         patchCondition(condition.id, {
@@ -1025,7 +1029,7 @@ function RulesEditor({
                           {event}
                         </option>
                       ))}
-                    </select>
+                    </FancySelect>
                   </label>
                 </div>
               )}
@@ -1435,9 +1439,9 @@ export function CampaignsShell({ embedded = false }: { embedded?: boolean }) {
   ) {
     return (
       <label className="space-y-1 block">
-        <span className="text-xs font-medium text-slate-700">{label}</span>
+        <span className="text-xs font-medium text-gray-700">{label}</span>
         <input
-          className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+          className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm"
           value={value}
           placeholder={placeholder}
           onChange={(event: ChangeEvent<HTMLInputElement>) => onChange(event.target.value)}
@@ -1449,12 +1453,12 @@ export function CampaignsShell({ embedded = false }: { embedded?: boolean }) {
   function renderNumberField(label: string, value: number, onChange: (value: number) => void) {
     return (
       <label className="space-y-1 block">
-        <span className="text-xs font-medium text-slate-700">{label}</span>
+        <span className="text-xs font-medium text-gray-700">{label}</span>
         <input
           type="number"
           min={0}
           step={1}
-          className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+          className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm"
           value={value}
           onChange={(event: ChangeEvent<HTMLInputElement>) =>
             onChange(normalizeNumber(event.target.value, 0))
@@ -1472,9 +1476,9 @@ export function CampaignsShell({ embedded = false }: { embedded?: boolean }) {
   ) {
     return (
       <label className="space-y-1 block">
-        <span className="text-xs font-medium text-slate-700">{label}</span>
+        <span className="text-xs font-medium text-gray-700">{label}</span>
         <textarea
-          className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+          className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm"
           rows={rows}
           value={value}
           onChange={(event: ChangeEvent<HTMLTextAreaElement>) => onChange(event.target.value)}
@@ -1484,64 +1488,29 @@ export function CampaignsShell({ embedded = false }: { embedded?: boolean }) {
   }
 
   const sidebar = (
-    <aside className="w-56 shrink-0 border-r border-slate-200 bg-slate-50 flex flex-col">
-      <div className="px-4 py-5">
-        <span className="text-sm font-semibold tracking-tight">send-again</span>
-      </div>
-
-      <div className="px-4 pb-4 border-b border-slate-200">
-        <p className="text-xs text-slate-500 truncate">guillaume.gay@protonmail.com</p>
-        <button type="button" className="mt-1 text-xs text-slate-900 hover:underline">
-          Sign out
-        </button>
-      </div>
-
-      <div className="px-4 py-3">
-        <button
-          type="button"
-          className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-100"
-        >
-          Add
-        </button>
-      </div>
-
-      <nav className="flex flex-col gap-1 px-2">
-        <Link
-          href="/"
-          className="text-left px-3 py-1.5 rounded text-sm text-slate-600 hover:bg-slate-200"
-        >
-          Compose
-        </Link>
-        <Link
-          href="/"
-          className="text-left px-3 py-1.5 rounded text-sm text-slate-600 hover:bg-slate-200"
-        >
-          Contacts
-        </Link>
-        <Link
-          href="/"
-          className="text-left px-3 py-1.5 rounded text-sm text-slate-600 hover:bg-slate-200"
-        >
-          History
-        </Link>
-        <Link
-          href="/"
-          className="text-left px-3 py-1.5 rounded text-sm text-slate-600 hover:bg-slate-200"
-        >
-          Settings
-        </Link>
-        <Link
-          href="/campaigns"
-          className="text-left px-3 py-1.5 rounded text-sm text-white bg-slate-900 font-medium"
-        >
-          Campaigns
-        </Link>
-      </nav>
-
-      <div className="mt-auto px-4 py-3 border-t border-slate-200">
-        <span className="text-xs text-slate-500">{campaigns.length} campaigns</span>
-      </div>
-    </aside>
+    <AppSidebar
+      brand="Email Campaign"
+      userEmail="Campaign workspace"
+      controls={
+        <div className="px-3 mt-4 mb-4">
+          <button
+            type="button"
+            onClick={createCampaign}
+            className="w-full rounded border border-gray-300 px-3 py-1.5 text-xs font-medium hover:bg-gray-100"
+          >
+            New campaign
+          </button>
+        </div>
+      }
+      items={[
+        { id: "compose", label: "Compose", href: "/", active: false },
+        { id: "contacts", label: "Contacts", href: "/", active: false },
+        { id: "history", label: "History", href: "/", active: false },
+        { id: "campaigns", label: "Campaigns", href: "/campaigns", active: true },
+        { id: "settings", label: "Settings", href: "/", active: false },
+      ]}
+      footer={<span className="text-xs text-gray-500">{campaigns.length} campaigns</span>}
+    />
   );
 
   const content = (
@@ -1551,22 +1520,22 @@ export function CampaignsShell({ embedded = false }: { embedded?: boolean }) {
           <div className="mx-auto w-full max-w-3xl">
             <header className="mb-4 flex flex-wrap items-center justify-between gap-2">
               <div>
-                <p className="text-xs uppercase tracking-[.16em] text-slate-500">Campaigns</p>
+                <p className="text-xs uppercase tracking-[.16em] text-gray-500">Campaigns</p>
                 <h1 className="text-xl font-semibold">Email Campaigns</h1>
               </div>
               <button
                 type="button"
                 onClick={createCampaign}
-                className="rounded-full border border-slate-900 bg-slate-900 px-4 py-1.5 text-sm text-white"
+                className="rounded-full border border-gray-900 bg-gray-900 px-4 py-1.5 text-sm text-white"
               >
                 Create new campaign
               </button>
             </header>
 
-            <section className="rounded-2xl border border-slate-200 bg-white p-4">
-              <p className="text-sm font-semibold text-slate-900">Campaign list</p>
+            <section className="rounded-2xl border border-gray-200 bg-white p-4">
+              <p className="text-sm font-semibold text-gray-900">Campaign list</p>
               {orderedCampaigns.length === 0 ? (
-                <p className="mt-2 text-sm text-slate-500">
+                <p className="mt-2 text-sm text-gray-500">
                   No campaigns yet. Create one to get started.
                 </p>
               ) : (
@@ -1578,12 +1547,12 @@ export function CampaignsShell({ embedded = false }: { embedded?: boolean }) {
                     return (
                       <div
                         key={campaign.campaignId}
-                        className="rounded-xl border border-slate-200 bg-slate-50 p-3"
+                        className="rounded-xl border border-gray-200 bg-gray-50 p-3"
                       >
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <div className="min-w-0">
-                            <p className="truncate font-medium text-slate-900">{campaign.name}</p>
-                            <p className="text-xs text-slate-500">
+                            <p className="truncate font-medium text-gray-900">{campaign.name}</p>
+                            <p className="text-xs text-gray-500">
                               Updated {campaign.updatedAt.slice(0, 10)} · {sendCount} send · {delayCount} delay ·{" "}
                               {ruleCount} rule
                             </p>
@@ -1596,7 +1565,7 @@ export function CampaignsShell({ embedded = false }: { embedded?: boolean }) {
                                 event.stopPropagation();
                                 openCampaign(campaign.campaignId);
                               }}
-                              className="rounded-full border border-slate-900 bg-slate-900 px-3 py-1 text-xs text-white"
+                              className="rounded-full border border-gray-900 bg-gray-900 px-3 py-1 text-xs text-white"
                             >
                               Edit
                             </button>
@@ -1621,22 +1590,22 @@ export function CampaignsShell({ embedded = false }: { embedded?: boolean }) {
             </section>
           </div>
         ) : (
-          <div className="flex min-h-[760px] overflow-hidden rounded-2xl border border-slate-200 bg-white">
-            <div className="flex-1 overflow-y-auto bg-slate-50 p-4">
+          <div className="flex min-h-[760px] overflow-hidden rounded-2xl border border-gray-200 bg-white">
+            <div className="flex-1 overflow-y-auto bg-gray-50 p-4">
               <header className="mb-4 flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
-                  <p className="text-xs uppercase tracking-[.16em] text-slate-500">Workflow builder</p>
+                  <p className="text-xs uppercase tracking-[.16em] text-gray-500">Workflow builder</p>
                   <div className="mt-2 max-w-md">
                     {renderTextField("Campaign name", draft.name, updateCampaignName)}
                   </div>
-                  <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
-                    <span className="rounded-full border border-slate-300 bg-white px-2 py-0.5">
+                  <div className="mt-2 flex flex-wrap gap-2 text-xs text-gray-600">
+                    <span className="rounded-full border border-gray-300 bg-white px-2 py-0.5">
                       {sendNodes.length} send
                     </span>
-                    <span className="rounded-full border border-slate-300 bg-white px-2 py-0.5">
+                    <span className="rounded-full border border-gray-300 bg-white px-2 py-0.5">
                       {delayNodes.length} delay
                     </span>
-                    <span className="rounded-full border border-slate-300 bg-white px-2 py-0.5">
+                    <span className="rounded-full border border-gray-300 bg-white px-2 py-0.5">
                       {ruleNodes.length} rule
                     </span>
                   </div>
@@ -1645,76 +1614,76 @@ export function CampaignsShell({ embedded = false }: { embedded?: boolean }) {
                   <button
                     type="button"
                     onClick={() => addNode("send")}
-                    className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm hover:bg-slate-100"
+                    className="rounded-full border border-gray-300 bg-white px-3 py-1.5 text-sm hover:bg-gray-100"
                   >
                     + Send email
                   </button>
                   <button
                     type="button"
                     onClick={() => addNode("delay")}
-                    className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm hover:bg-slate-100"
+                    className="rounded-full border border-gray-300 bg-white px-3 py-1.5 text-sm hover:bg-gray-100"
                   >
                     + Delay
                   </button>
                   <button
                     type="button"
                     onClick={() => addNode("rule")}
-                    className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm hover:bg-slate-100"
+                    className="rounded-full border border-gray-300 bg-white px-3 py-1.5 text-sm hover:bg-gray-100"
                   >
                     + Rule
                   </button>
                   <button
                     type="button"
                     onClick={loadExample}
-                    className="rounded-full border border-slate-900 bg-slate-900 px-3 py-1.5 text-sm text-white"
+                    className="rounded-full border border-gray-900 bg-gray-900 px-3 py-1.5 text-sm text-white"
                   >
                     Load example
                   </button>
                   <button
                     type="button"
                     onClick={closeBuilder}
-                    className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm"
+                    className="rounded-full border border-gray-300 bg-white px-3 py-1.5 text-sm"
                   >
                     Campaign list
                   </button>
                 </div>
               </header>
 
-              <section className="rounded-2xl border border-slate-200 bg-white p-4">
+              <section className="rounded-2xl border border-gray-200 bg-white p-4">
                 <div className="flex items-center justify-between">
                   <p className="text-sm font-semibold">Workflow graph</p>
-                  <p className="text-xs text-slate-500">Select node to edit on right panel.</p>
+                  <p className="text-xs text-gray-500">Select node to edit on right panel.</p>
                 </div>
 
                 {draft.nodes.length === 0 ? (
-                  <div className="mt-4 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
-                    <p className="text-sm text-slate-600">Create your first node.</p>
+                  <div className="mt-4 rounded-xl border border-dashed border-gray-300 bg-gray-50 p-6 text-center">
+                    <p className="text-sm text-gray-600">Create your first node.</p>
                     <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
                       <button
                         type="button"
                         onClick={() => addNode("send")}
-                        className="rounded-full border border-slate-900 bg-slate-900 px-3 py-1.5 text-sm text-white"
+                        className="rounded-full border border-gray-900 bg-gray-900 px-3 py-1.5 text-sm text-white"
                       >
                         Add send
                       </button>
                       <button
                         type="button"
                         onClick={() => addNode("delay")}
-                        className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm"
+                        className="rounded-full border border-gray-300 bg-white px-3 py-1.5 text-sm"
                       >
                         Add delay
                       </button>
                       <button
                         type="button"
                         onClick={() => addNode("rule")}
-                        className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm"
+                        className="rounded-full border border-gray-300 bg-white px-3 py-1.5 text-sm"
                       >
                         Add rule
                       </button>
                     </div>
                   </div>
                 ) : (
-                  <div className="mt-4 overflow-auto rounded-xl border border-slate-200 bg-slate-50">
+                  <div className="mt-4 overflow-auto rounded-xl border border-gray-200 bg-gray-50">
                     <div
                       className="relative"
                       style={{
@@ -1814,19 +1783,19 @@ export function CampaignsShell({ embedded = false }: { embedded?: boolean }) {
                               onClick={() => setSelectedNodeId(node.id)}
                               className={`relative w-full rounded-xl border bg-white p-3 text-left transition ${
                                 selected
-                                  ? "border-slate-900 shadow ring-2 ring-slate-900/15"
-                                  : "border-slate-200 hover:border-slate-300"
+                                  ? "border-gray-900 shadow ring-2 ring-gray-900/15"
+                                  : "border-gray-200 hover:border-gray-300"
                               }`}
                               style={{ minHeight: `${NODE_HEIGHT}px` }}
                             >
-                              <span className="absolute left-1/2 -top-2 h-3 w-3 -translate-x-1/2 rounded-full border border-slate-300 bg-white" />
+                              <span className="absolute left-1/2 -top-2 h-3 w-3 -trangray-x-1/2 rounded-full border border-gray-300 bg-white" />
                               {isRuleNode(node) ? (
                                 <>
-                                  <span className="absolute bottom-[-6px] left-[35%] h-3 w-3 -translate-x-1/2 rounded-full border border-emerald-300 bg-emerald-500" />
-                                  <span className="absolute bottom-[-6px] left-[65%] h-3 w-3 -translate-x-1/2 rounded-full border border-rose-300 bg-rose-500" />
+                                  <span className="absolute bottom-[-6px] left-[35%] h-3 w-3 -trangray-x-1/2 rounded-full border border-emerald-300 bg-emerald-500" />
+                                  <span className="absolute bottom-[-6px] left-[65%] h-3 w-3 -trangray-x-1/2 rounded-full border border-rose-300 bg-rose-500" />
                                 </>
                               ) : (
-                                <span className="absolute bottom-[-6px] left-1/2 h-3 w-3 -translate-x-1/2 rounded-full border border-slate-300 bg-slate-600" />
+                                <span className="absolute bottom-[-6px] left-1/2 h-3 w-3 -trangray-x-1/2 rounded-full border border-gray-300 bg-gray-600" />
                               )}
 
                               <div className="flex items-center justify-between gap-2">
@@ -1843,10 +1812,10 @@ export function CampaignsShell({ embedded = false }: { embedded?: boolean }) {
                                     {nodeIcon(node)}
                                   </span>
                                   <div>
-                                    <p className="text-[11px] uppercase tracking-[.16em] text-slate-500">
+                                    <p className="text-[11px] uppercase tracking-[.16em] text-gray-500">
                                       {nodeKindLabel(node)}
                                     </p>
-                                    <p className="text-xs text-slate-500">Step {index + 1}</p>
+                                    <p className="text-xs text-gray-500">Step {index + 1}</p>
                                   </div>
                                 </div>
                                 <button
@@ -1862,21 +1831,21 @@ export function CampaignsShell({ embedded = false }: { embedded?: boolean }) {
                                 </button>
                               </div>
 
-                              <h3 className="mt-2 text-sm font-semibold text-slate-900">
+                              <h3 className="mt-2 text-sm font-semibold text-gray-900">
                                 {node.label || "Untitled"}
                               </h3>
-                              <p className="mt-1 text-xs text-slate-600">{nodeSummary(node)}</p>
+                              <p className="mt-1 text-xs text-gray-600">{nodeSummary(node)}</p>
 
                               <div className="mt-2 space-y-1">
                                 {outgoing.length === 0 ? (
-                                  <p className="text-[11px] text-slate-400">No transition</p>
+                                  <p className="text-[11px] text-gray-400">No transition</p>
                                 ) : (
                                   outgoing.map((edge) => {
                                     const target = nodeById.get(edge.toNodeId);
                                     const targetLabel = target ? target.label || target.id : edge.toNodeId;
                                     return (
-                                      <p key={edge.id} className="text-[11px] text-slate-500">
-                                        <span className="font-medium text-slate-700">{portLabel(edge.port)}</span>
+                                      <p key={edge.id} className="text-[11px] text-gray-500">
+                                        <span className="font-medium text-gray-700">{portLabel(edge.port)}</span>
                                         {" → "}
                                         {targetLabel}
                                       </p>
@@ -1894,16 +1863,16 @@ export function CampaignsShell({ embedded = false }: { embedded?: boolean }) {
               </section>
             </div>
 
-            <aside className="w-[420px] shrink-0 overflow-y-auto border-l border-slate-200 bg-white p-4">
-              <div className="border-b border-slate-200 pb-3">
-                <p className="text-xs uppercase tracking-[.16em] text-slate-500">Node editor</p>
+            <aside className="w-[420px] shrink-0 overflow-y-auto border-l border-gray-200 bg-white p-4">
+              <div className="border-b border-gray-200 pb-3">
+                <p className="text-xs uppercase tracking-[.16em] text-gray-500">Node editor</p>
                 <p className="mt-1 text-sm font-semibold">
                   {selectedNode ? selectedNode.label || "Untitled node" : "Select a node"}
                 </p>
               </div>
 
               {!selectedNode ? (
-                <p className="mt-4 text-sm text-slate-500">Select a node from the graph.</p>
+                <p className="mt-4 text-sm text-gray-500">Select a node from the graph.</p>
               ) : (
                 <div className="mt-4 space-y-4">
                   {isSendNode(selectedNode) ? (
@@ -1922,9 +1891,9 @@ export function CampaignsShell({ embedded = false }: { embedded?: boolean }) {
                         7
                       )}
 
-                      <div className="rounded-xl border border-slate-200 p-3">
-                        <p className="text-xs uppercase tracking-[.16em] text-slate-500">Audience</p>
-                        <p className="mt-1 text-xs text-slate-500">
+                      <div className="rounded-xl border border-gray-200 p-3">
+                        <p className="text-xs uppercase tracking-[.16em] text-gray-500">Audience</p>
+                        <p className="mt-1 text-xs text-gray-500">
                           Same logic as Compose: manual recipients or field/history rules.
                         </p>
                         <div className="mt-2 flex gap-1">
@@ -1938,8 +1907,8 @@ export function CampaignsShell({ embedded = false }: { embedded?: boolean }) {
                             }
                             className={`rounded-full border px-2 py-1 text-xs ${
                               selectedNode.audience.mode === "manual"
-                                ? "border-slate-900 bg-slate-900 text-white"
-                                : "border-slate-300 bg-white text-slate-700"
+                                ? "border-gray-900 bg-gray-900 text-white"
+                                : "border-gray-300 bg-white text-gray-700"
                             }`}
                           >
                             Manual
@@ -1954,8 +1923,8 @@ export function CampaignsShell({ embedded = false }: { embedded?: boolean }) {
                             }
                             className={`rounded-full border px-2 py-1 text-xs ${
                               selectedNode.audience.mode === "rules"
-                                ? "border-slate-900 bg-slate-900 text-white"
-                                : "border-slate-300 bg-white text-slate-700"
+                                ? "border-gray-900 bg-gray-900 text-white"
+                                : "border-gray-300 bg-white text-gray-700"
                             }`}
                           >
                             Rules
@@ -2001,9 +1970,10 @@ export function CampaignsShell({ embedded = false }: { embedded?: boolean }) {
                       </div>
 
                       <label className="space-y-1 block">
-                        <span className="text-xs font-medium text-slate-700">Next step</span>
-                        <select
-                          className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+                        <span className="text-xs font-medium text-gray-700">Next step</span>
+                        <FancySelect
+                          wrapperClassName="w-full"
+                          className="h-9 border-gray-300 text-sm"
                           value={getTransitionTargetId(selectedNode.id, "next")}
                           onChange={(event: ChangeEvent<HTMLSelectElement>) =>
                             setTransition(selectedNode.id, "next", event.target.value)
@@ -2017,7 +1987,7 @@ export function CampaignsShell({ embedded = false }: { embedded?: boolean }) {
                                 {node.label || node.id}
                               </option>
                             ))}
-                        </select>
+                        </FancySelect>
                       </label>
                     </>
                   ) : null}
@@ -2036,9 +2006,10 @@ export function CampaignsShell({ embedded = false }: { embedded?: boolean }) {
                         )}
                       </div>
                       <label className="space-y-1 block">
-                        <span className="text-xs font-medium text-slate-700">Next step</span>
-                        <select
-                          className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+                        <span className="text-xs font-medium text-gray-700">Next step</span>
+                        <FancySelect
+                          wrapperClassName="w-full"
+                          className="h-9 border-gray-300 text-sm"
                           value={getTransitionTargetId(selectedNode.id, "next")}
                           onChange={(event: ChangeEvent<HTMLSelectElement>) =>
                             setTransition(selectedNode.id, "next", event.target.value)
@@ -2052,7 +2023,7 @@ export function CampaignsShell({ embedded = false }: { embedded?: boolean }) {
                                 {node.label || node.id}
                               </option>
                             ))}
-                        </select>
+                        </FancySelect>
                       </label>
                     </>
                   ) : null}
@@ -2077,9 +2048,10 @@ export function CampaignsShell({ embedded = false }: { embedded?: boolean }) {
                       />
 
                       <label className="space-y-1 block">
-                        <span className="text-xs font-medium text-slate-700">If true</span>
-                        <select
-                          className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+                        <span className="text-xs font-medium text-gray-700">If true</span>
+                        <FancySelect
+                          wrapperClassName="w-full"
+                          className="h-9 border-gray-300 text-sm"
                           value={getTransitionTargetId(selectedNode.id, "true")}
                           onChange={(event: ChangeEvent<HTMLSelectElement>) =>
                             setTransition(selectedNode.id, "true", event.target.value)
@@ -2093,13 +2065,14 @@ export function CampaignsShell({ embedded = false }: { embedded?: boolean }) {
                                 {node.label || node.id}
                               </option>
                             ))}
-                        </select>
+                        </FancySelect>
                       </label>
 
                       <label className="space-y-1 block">
-                        <span className="text-xs font-medium text-slate-700">If false</span>
-                        <select
-                          className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+                        <span className="text-xs font-medium text-gray-700">If false</span>
+                        <FancySelect
+                          wrapperClassName="w-full"
+                          className="h-9 border-gray-300 text-sm"
                           value={getTransitionTargetId(selectedNode.id, "false")}
                           onChange={(event: ChangeEvent<HTMLSelectElement>) =>
                             setTransition(selectedNode.id, "false", event.target.value)
@@ -2113,7 +2086,7 @@ export function CampaignsShell({ embedded = false }: { embedded?: boolean }) {
                                 {node.label || node.id}
                               </option>
                             ))}
-                        </select>
+                        </FancySelect>
                       </label>
                     </>
                   ) : null}
@@ -2131,7 +2104,7 @@ export function CampaignsShell({ embedded = false }: { embedded?: boolean }) {
   }
 
   return (
-    <div className="flex h-screen bg-slate-100 text-slate-900">
+    <div className="app-shell bg-gray-100 text-gray-900">
       {sidebar}
       {content}
     </div>

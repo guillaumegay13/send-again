@@ -11,6 +11,8 @@ import {
 } from "react";
 import { getBrowserSupabaseClient } from "@/lib/supabase-browser";
 import { appendWorkspaceFooter } from "@/lib/email-footer";
+import { FancySelect } from "@/components/ui/fancy-select";
+import { AppSidebar } from "@/components/ui/app-sidebar";
 import { CampaignsShell } from "./campaigns/page";
 
 type Tab = "compose" | "contacts" | "history" | "settings" | "campaigns";
@@ -90,6 +92,19 @@ interface TopicDeliveryAnalytics {
   deliveredSends: number;
   undeliveredSends: number;
   deliveryRate: number;
+}
+
+interface SubjectCampaignMetric {
+  subject: string;
+  totalSends: number;
+  openedSends: number;
+  clickedSends: number;
+  openRate: number;
+  ctr: number;
+}
+
+interface SubjectCampaignMetricsResponse {
+  items: SubjectCampaignMetric[];
 }
 
 const HISTORY_RULES_PAGE_SIZE = 100;
@@ -816,6 +831,10 @@ export default function ComposePage() {
   const [workspaceMessage, setWorkspaceMessage] = useState<string | null>(null);
   const [newWorkspaceId, setNewWorkspaceId] = useState("");
   const [addingWorkspace, setAddingWorkspace] = useState(false);
+  const [workspaceDeleteConfirmOpen, setWorkspaceDeleteConfirmOpen] = useState(false);
+  const [deletingWorkspace, setDeletingWorkspace] = useState(false);
+  const [workspaceDeleteConfirmValue, setWorkspaceDeleteConfirmValue] =
+    useState("");
 
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -859,6 +878,15 @@ export default function ComposePage() {
   );
   const [topicAnalytics, setTopicAnalytics] =
     useState<TopicDeliveryAnalytics | null>(null);
+  const [subjectMetrics, setSubjectMetrics] = useState<SubjectCampaignMetric[]>(
+    []
+  );
+  const [subjectMetricsLoading, setSubjectMetricsLoading] = useState(false);
+  const [subjectMetricsError, setSubjectMetricsError] = useState<string | null>(
+    null
+  );
+  const [selectedCampaignSubject, setSelectedCampaignSubject] = useState("all");
+  const [topicQuickPicks, setTopicQuickPicks] = useState<string[]>([]);
   const [recipientConditions, setRecipientConditions] = useState<
     RecipientCondition[]
   >([]);
@@ -1183,6 +1211,9 @@ export default function ComposePage() {
       setLoading(false);
       setWorkspaces([]);
       setActiveId(null);
+      setWorkspaceDeleteConfirmOpen(false);
+      setDeletingWorkspace(false);
+      setWorkspaceDeleteConfirmValue("");
       setContactsMap({});
       setContactsPage(1);
       setContactsImporting(false);
@@ -1200,6 +1231,11 @@ export default function ComposePage() {
       setTopicAnalyticsLoading(false);
       setTopicAnalyticsError(null);
       setTopicAnalytics(null);
+      setSubjectMetrics([]);
+      setSubjectMetricsLoading(false);
+      setSubjectMetricsError(null);
+      setSelectedCampaignSubject("all");
+      setTopicQuickPicks([]);
       setHistoryLoading(false);
       setNamecheapStatus(null);
       setCloudflareStatus(null);
@@ -1247,6 +1283,9 @@ export default function ComposePage() {
   }, [activeId, clearSettingsSavedResetTimer]);
 
   useEffect(() => {
+    setWorkspaceDeleteConfirmOpen(false);
+    setDeletingWorkspace(false);
+    setWorkspaceDeleteConfirmValue("");
     setContactsPage(1);
     setContactsImporting(false);
     setContactsImportMessage(null);
@@ -1262,6 +1301,11 @@ export default function ComposePage() {
     setTopicAnalyticsLoading(false);
     setTopicAnalyticsError(null);
     setTopicAnalytics(null);
+    setSubjectMetrics([]);
+    setSubjectMetricsLoading(false);
+    setSubjectMetricsError(null);
+    setSelectedCampaignSubject("all");
+    setTopicQuickPicks([]);
     setNamecheapStatus(null);
     setCloudflareStatus(null);
     setRoute53Status(null);
@@ -1339,6 +1383,42 @@ export default function ComposePage() {
     historyReloadKey,
     fetchJson,
   ]);
+
+  useEffect(() => {
+    if (!sessionToken || !activeId || tab !== "history") return;
+    let cancelled = false;
+
+    const params = new URLSearchParams({
+      workspace: activeId,
+      mode: "subject",
+      limit: "50",
+    });
+
+    setSubjectMetricsLoading(true);
+    setSubjectMetricsError(null);
+    fetchJson<SubjectCampaignMetricsResponse>(
+      `/api/history/analytics?${params.toString()}`
+    )
+      .then((data) => {
+        if (cancelled) return;
+        setSubjectMetrics(Array.isArray(data.items) ? data.items : []);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        const message = error instanceof Error ? error.message : String(error);
+        setSubjectMetrics([]);
+        setSubjectMetricsError(message);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setSubjectMetricsLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionToken, activeId, tab, historyReloadKey, fetchJson]);
 
   useEffect(() => {
     if (!sessionToken || !activeId) return;
@@ -1672,6 +1752,9 @@ export default function ComposePage() {
     setAuthError(null);
     setWorkspaces([]);
     setActiveId(null);
+    setWorkspaceDeleteConfirmOpen(false);
+    setDeletingWorkspace(false);
+    setWorkspaceDeleteConfirmValue("");
     setContactsMap({});
     setHistory([]);
     setHistoryRows([]);
@@ -1684,6 +1767,11 @@ export default function ComposePage() {
     setTopicAnalyticsLoading(false);
     setTopicAnalyticsError(null);
     setTopicAnalytics(null);
+    setSubjectMetrics([]);
+    setSubjectMetricsLoading(false);
+    setSubjectMetricsError(null);
+    setSelectedCampaignSubject("all");
+    setTopicQuickPicks([]);
     setHistoryLoading(false);
     setWorkspaceMessage(null);
     setNewWorkspaceId("");
@@ -1737,6 +1825,59 @@ export default function ComposePage() {
 
   async function addWorkspace() {
     await addWorkspaceById(newWorkspaceId);
+  }
+
+  function openWorkspaceDeleteConfirm() {
+    if (!activeId || deletingWorkspace) return;
+    setWorkspaceDeleteConfirmValue("");
+    setWorkspaceDeleteConfirmOpen(true);
+  }
+
+  function cancelWorkspaceDelete() {
+    if (deletingWorkspace) return;
+    setWorkspaceDeleteConfirmValue("");
+    setWorkspaceDeleteConfirmOpen(false);
+  }
+
+  async function confirmWorkspaceDelete() {
+    const workspaceId = activeId;
+    if (!workspaceId || deletingWorkspace) return;
+    if (workspaceDeleteConfirmValue.trim().toLowerCase() !== workspaceId) {
+      setWorkspaceMessage(
+        `Type "${workspaceId}" exactly to confirm deletion.`
+      );
+      return;
+    }
+
+    setDeletingWorkspace(true);
+    setWorkspaceMessage(null);
+    try {
+      await fetchJson<{ ok: boolean }>(
+        `/api/workspaces?id=${encodeURIComponent(workspaceId)}`,
+        { method: "DELETE" }
+      );
+
+      const remainingWorkspaces = workspaces
+        .filter((item) => item.id !== workspaceId)
+        .sort((a, b) => a.id.localeCompare(b.id));
+
+      setWorkspaces(remainingWorkspaces);
+      setActiveId(remainingWorkspaces[0]?.id ?? null);
+      setContactsMap((prev) => {
+        const next = { ...prev };
+        delete next[workspaceId];
+        return next;
+      });
+      setWorkspaceMessage(`Workspace deleted: ${workspaceId}`);
+      setWorkspaceDeleteConfirmValue("");
+      setWorkspaceDeleteConfirmOpen(false);
+    } catch (error) {
+      setWorkspaceMessage(
+        error instanceof Error ? error.message : String(error)
+      );
+    } finally {
+      setDeletingWorkspace(false);
+    }
   }
 
   async function refreshApiKeys() {
@@ -2232,6 +2373,46 @@ export default function ComposePage() {
     historyTotal > 0 && historyRows.length > 0
       ? historyRangeStart + historyRows.length - 1
       : 0;
+  const filteredSubjectMetrics = useMemo(() => {
+    if (selectedCampaignSubject === "all") return subjectMetrics;
+    return subjectMetrics.filter(
+      (metric) => metric.subject === selectedCampaignSubject
+    );
+  }, [selectedCampaignSubject, subjectMetrics]);
+  const filteredSubjectTotals = useMemo(() => {
+    return filteredSubjectMetrics.reduce(
+      (acc, metric) => {
+        acc.totalSends += metric.totalSends;
+        acc.openedSends += metric.openedSends;
+        acc.clickedSends += metric.clickedSends;
+        return acc;
+      },
+      { totalSends: 0, openedSends: 0, clickedSends: 0 }
+    );
+  }, [filteredSubjectMetrics]);
+  const campaignTopicOptions = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          ...topicQuickPicks,
+          ...subjectMetrics.map((metric) => metric.subject),
+          ...availableSubjects,
+        ])
+      )
+        .map((value) => value.trim())
+        .filter(Boolean),
+    [availableSubjects, subjectMetrics, topicQuickPicks]
+  );
+
+  useEffect(() => {
+    if (selectedCampaignSubject === "all") return;
+    const exists = subjectMetrics.some(
+      (metric) => metric.subject === selectedCampaignSubject
+    );
+    if (!exists) {
+      setSelectedCampaignSubject("all");
+    }
+  }, [selectedCampaignSubject, subjectMetrics]);
 
   function refreshHistoryPage() {
     setHistoryReloadKey((prev) => prev + 1);
@@ -2276,7 +2457,13 @@ export default function ComposePage() {
     fetchJson<TopicDeliveryAnalytics>(
       `/api/history/analytics?${params.toString()}`
     )
-      .then((data) => setTopicAnalytics(data))
+      .then((data) => {
+        setTopicAnalytics(data);
+        setTopicQuickPicks((prev) => {
+          const merged = [topic, ...prev].filter(Boolean);
+          return Array.from(new Set(merged)).slice(0, 30);
+        });
+      })
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         setTopicAnalytics(null);
@@ -2680,86 +2867,65 @@ export default function ComposePage() {
     namecheapConfig.clientIp.trim().length > 0;
   const isCloudflareConfigComplete =
     cloudflareConfig.apiToken.trim().length > 0;
+  const canConfirmWorkspaceDelete =
+    workspaceDeleteConfirmValue.trim().toLowerCase() ===
+    (workspace?.id ?? "").toLowerCase();
 
   return (
-    <div className="flex h-screen">
-      {/* Sidebar */}
-      <div className="w-48 shrink-0 border-r border-gray-200 bg-gray-50 flex flex-col">
-        <div className="px-4 py-5">
-          <span className="text-sm font-semibold tracking-tight">
-            Email Campaign
-          </span>
-        </div>
-
-        <div className="px-4 pb-4 border-b border-gray-200">
-          <p className="text-xs text-gray-500 truncate">{userEmail}</p>
-          <button
-            onClick={handleSignOut}
-            className="mt-1 text-xs text-black hover:underline"
-          >
-            Sign out
-          </button>
-          {authError && (
-            <p className="mt-2 text-[11px] text-red-600">{authError}</p>
-          )}
-        </div>
-
-        <div className="px-3 mt-4 mb-4">
-          <div className="flex gap-2">
-            <select
-              value={activeId ?? ""}
-              onChange={(e) => setActiveId(e.target.value)}
-              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-black"
-            >
-              {workspaces.map((ws) => (
-                <option key={ws.id} value={ws.id}>
-                  {ws.name}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={() => {
-                if (addingWorkspace) return;
-                const value = prompt("Domain to add (e.g. example.com):");
-                if (!value) return;
-                void addWorkspaceById(value);
-              }}
-              disabled={addingWorkspace}
-              className="shrink-0 rounded border border-gray-300 px-2 py-1.5 text-xs hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {addingWorkspace ? "..." : "Add"}
-            </button>
+    <div className="app-shell">
+      <AppSidebar
+        brand="Email Campaign"
+        userEmail={userEmail}
+        onSignOut={handleSignOut}
+        authError={authError}
+        controls={
+          <div className="px-3 mt-4 mb-4">
+            <div className="flex gap-2">
+              <FancySelect
+                wrapperClassName="w-full"
+                value={activeId ?? ""}
+                onChange={(e) => setActiveId(e.target.value)}
+                className="h-8 border-gray-300 text-sm focus:border-black focus:ring-black/10"
+              >
+                {workspaces.map((ws) => (
+                  <option key={ws.id} value={ws.id}>
+                    {ws.name}
+                  </option>
+                ))}
+              </FancySelect>
+              <button
+                type="button"
+                onClick={() => {
+                  if (addingWorkspace) return;
+                  const value = prompt("Domain to add (e.g. example.com):");
+                  if (!value) return;
+                  void addWorkspaceById(value);
+                }}
+                disabled={addingWorkspace}
+                className="shrink-0 rounded border border-gray-300 px-2 py-1.5 text-xs hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {addingWorkspace ? "..." : "Add"}
+              </button>
+            </div>
+            {workspaceMessage && (
+              <p className="mt-1 text-[11px] text-gray-500">{workspaceMessage}</p>
+            )}
           </div>
-          {workspaceMessage && (
-            <p className="mt-1 text-[11px] text-gray-500">{workspaceMessage}</p>
-          )}
-        </div>
-
-        <nav className="flex flex-col gap-1 px-2">
-          {(["compose", "contacts", "history", "settings", "campaigns"] as Tab[]).map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`text-left px-3 py-1.5 rounded text-sm capitalize ${
-                tab === t
-                  ? "bg-black text-white font-medium"
-                  : "text-gray-600 hover:bg-gray-200"
-              }`}
-            >
-              {t}
-            </button>
-          ))}
-        </nav>
-
-        {contacts.length > 0 && (
-          <div className="mt-auto px-4 py-3 border-t border-gray-200">
+        }
+        items={(["compose", "contacts", "history", "campaigns", "settings"] as Tab[]).map((t) => ({
+          id: t,
+          label: t,
+          active: tab === t,
+          onClick: () => setTab(t),
+        }))}
+        footer={
+          contacts.length > 0 ? (
             <span className="text-xs text-gray-400">
               {contacts.length} contact{contacts.length !== 1 && "s"}
             </span>
-          </div>
-        )}
-      </div>
+          ) : null
+        }
+      />
 
       {/* Main content */}
       <div className="flex flex-1 min-w-0">
@@ -3394,30 +3560,174 @@ export default function ComposePage() {
               </button>
             </div>
             <p className="text-xs text-gray-400 mb-4">{workspace.name}</p>
+            <div className="mb-4 rounded border border-gray-200 bg-gray-50 p-3">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    Campaign metrics by subject
+                  </p>
+                  {!subjectMetricsLoading && !subjectMetricsError && (
+                    <p className="mt-1 text-xs text-gray-500">
+                      {filteredSubjectMetrics.length} visible · {subjectMetrics.length} total
+                    </p>
+                  )}
+                </div>
+                {subjectMetrics.length > 0 && (
+                  <label className="w-full max-w-md space-y-1">
+                    <span className="text-[11px] font-medium uppercase tracking-wide text-gray-500">
+                      Campaign
+                    </span>
+                    <FancySelect
+                      wrapperClassName="w-full"
+                      value={selectedCampaignSubject}
+                      onChange={(event) => setSelectedCampaignSubject(event.target.value)}
+                      className="h-8 border-gray-300 text-xs"
+                    >
+                      <option value="all">All campaigns</option>
+                      {subjectMetrics.map((metric) => (
+                        <option key={metric.subject} value={metric.subject}>
+                          {metric.subject}
+                        </option>
+                      ))}
+                    </FancySelect>
+                  </label>
+                )}
+              </div>
+
+              {subjectMetricsLoading ? (
+                <p className="mt-2 text-xs text-gray-500">Loading metrics...</p>
+              ) : subjectMetricsError ? (
+                <p className="mt-2 text-xs text-red-600">{subjectMetricsError}</p>
+              ) : subjectMetrics.length === 0 ? (
+                <p className="mt-2 text-xs text-gray-500">
+                  No campaign metrics yet for this workspace.
+                </p>
+              ) : (
+                <div className="mt-2">
+                  <div className="mb-2 flex flex-wrap gap-2 text-xs text-gray-600">
+                    <span className="rounded-full border border-gray-300 bg-white px-2 py-0.5">
+                      Sends {filteredSubjectTotals.totalSends}
+                    </span>
+                    <span className="rounded-full border border-gray-300 bg-white px-2 py-0.5">
+                      Open rate{" "}
+                      {formatPercent(
+                        filteredSubjectTotals.totalSends > 0
+                          ? filteredSubjectTotals.openedSends /
+                              filteredSubjectTotals.totalSends
+                          : 0
+                      )}
+                    </span>
+                    <span className="rounded-full border border-gray-300 bg-white px-2 py-0.5">
+                      CTR{" "}
+                      {formatPercent(
+                        filteredSubjectTotals.totalSends > 0
+                          ? filteredSubjectTotals.clickedSends /
+                              filteredSubjectTotals.totalSends
+                          : 0
+                      )}
+                    </span>
+                  </div>
+                  <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-gray-200 text-gray-500">
+                        <th className="px-2 py-1.5 text-left font-semibold">Subject</th>
+                        <th className="px-2 py-1.5 text-right font-semibold">Sends</th>
+                        <th className="px-2 py-1.5 text-right font-semibold">Open rate</th>
+                        <th className="px-2 py-1.5 text-right font-semibold">CTR</th>
+                        <th className="px-2 py-1.5 text-right font-semibold">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredSubjectMetrics.map((metric) => (
+                        <tr key={metric.subject} className="border-b border-gray-100 last:border-0">
+                          <td className="max-w-[28rem] truncate px-2 py-1.5 text-gray-700">
+                            {metric.subject}
+                          </td>
+                          <td className="px-2 py-1.5 text-right text-gray-700">
+                            {metric.totalSends}
+                          </td>
+                          <td className="px-2 py-1.5 text-right text-gray-700">
+                            {formatPercent(metric.openRate)} ({metric.openedSends})
+                          </td>
+                          <td className="px-2 py-1.5 text-right text-gray-700">
+                            {formatPercent(metric.ctr)} ({metric.clickedSends})
+                          </td>
+                          <td className="px-2 py-1.5 text-right">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setTopicAnalyticsInput(metric.subject);
+                                setTopicAnalyticsError(null);
+                                setTopicQuickPicks((prev) =>
+                                  Array.from(new Set([metric.subject, ...prev])).slice(0, 30)
+                                );
+                              }}
+                              className="rounded border border-gray-300 px-2 py-1 text-[11px] font-medium text-gray-700 hover:bg-gray-100"
+                            >
+                              Use topic
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                </div>
+              )}
+            </div>
             <form
               onSubmit={submitTopicAnalytics}
               className="mb-4 rounded border border-gray-200 bg-gray-50 p-3"
             >
-              <div className="flex flex-wrap items-center gap-2">
-                <label
-                  htmlFor="topic-analytics"
-                  className="text-xs font-semibold uppercase tracking-wide text-gray-500"
-                >
-                  Topic delivery rate
+              <div className="flex flex-wrap items-end gap-2">
+                <label className="w-full max-w-md space-y-1">
+                  <span
+                    id="topic-analytics"
+                    className="text-xs font-semibold uppercase tracking-wide text-gray-500"
+                  >
+                    Topic delivery rate
+                  </span>
+                  <input
+                    type="text"
+                    value={topicAnalyticsInput}
+                    onChange={(event) => {
+                      setTopicAnalyticsInput(event.target.value);
+                      if (topicAnalyticsError) {
+                        setTopicAnalyticsError(null);
+                      }
+                    }}
+                    placeholder="e.g. onboarding, launch, follow-up"
+                    className="w-full rounded border border-gray-300 bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
+                  />
                 </label>
-                <input
-                  id="topic-analytics"
-                  type="text"
-                  value={topicAnalyticsInput}
-                  onChange={(event) => {
-                    setTopicAnalyticsInput(event.target.value);
-                    if (topicAnalyticsError) {
-                      setTopicAnalyticsError(null);
+                <label className="w-full max-w-md space-y-1">
+                  <span className="text-[11px] font-medium uppercase tracking-wide text-gray-500">
+                    Existing campaigns/topics
+                  </span>
+                  <FancySelect
+                    wrapperClassName="w-full"
+                    value={
+                      campaignTopicOptions.includes(topicAnalyticsInput.trim())
+                        ? topicAnalyticsInput.trim()
+                        : ""
                     }
-                  }}
-                  placeholder="e.g. onboarding, launch, follow-up"
-                  className="w-full max-w-md rounded border border-gray-300 bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
-                />
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      if (!value) return;
+                      setTopicAnalyticsInput(value);
+                      setTopicAnalyticsError(null);
+                    }}
+                    className="h-8 border-gray-300 text-xs"
+                  >
+                    <option value="">Select existing...</option>
+                    {campaignTopicOptions.map((topic) => (
+                      <option key={topic} value={topic}>
+                        {topic}
+                      </option>
+                    ))}
+                  </FancySelect>
+                </label>
                 <button
                   type="submit"
                   disabled={topicAnalyticsLoading || !activeId}
@@ -3643,16 +3953,17 @@ export default function ComposePage() {
                 <div className="rounded border border-gray-200 bg-white p-3">
                   <label className="flex flex-col gap-1">
                     <span className="text-sm text-gray-700 font-medium">DNS provider</span>
-                    <select
+                    <FancySelect
+                      wrapperClassName="max-w-xs"
                       value={dnsProvider}
                       onChange={(event) => setDnsProvider(event.target.value as DnsProvider)}
-                      className="max-w-xs rounded border border-gray-300 bg-white px-2 py-1.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-black"
+                      className="h-8 border-gray-300 text-xs font-medium focus:border-black focus:ring-black/10"
                     >
                       <option value="manual">Manual DNS</option>
                       <option value="namecheap">Namecheap</option>
                       <option value="cloudflare">Cloudflare</option>
                       <option value="route53">Amazon Route 53</option>
-                    </select>
+                    </FancySelect>
                     <span className="text-[11px] text-gray-500">
                       Choose where DNS should be managed for this domain.
                     </span>
@@ -4349,11 +4660,30 @@ export default function ComposePage() {
               </div>
             </div>
 
+            <div className="mt-6 rounded border border-red-200 bg-red-50 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-semibold text-red-700">Danger Zone</h2>
+                  <p className="mt-1 text-xs text-red-700">
+                    Delete this workspace and all associated data permanently.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={openWorkspaceDeleteConfirm}
+                  disabled={!activeId || deletingWorkspace}
+                  className="shrink-0 rounded border border-red-300 bg-white px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {deletingWorkspace ? "Deleting..." : "Delete workspace"}
+                </button>
+              </div>
+            </div>
+
           </div>
         )}
 
         {tab === "campaigns" && (
-          <div className="flex-1 min-w-0 overflow-y-auto bg-slate-100 text-slate-900">
+          <div className="flex-1 min-w-0 overflow-y-auto bg-gray-100 text-gray-900">
             <CampaignsShell embedded />
           </div>
         )}
@@ -4381,17 +4711,18 @@ export default function ComposePage() {
                 <span className="text-xs font-medium uppercase tracking-wide text-gray-500">
                   Email Column
                 </span>
-                <select
+                <FancySelect
+                  wrapperClassName="w-full"
                   value={String(csvImportConfig.emailColumnIndex)}
                   onChange={(event) => updateCsvEmailColumn(Number(event.target.value))}
-                  className="w-full rounded border border-gray-300 px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
+                  className="h-10 border-gray-300 text-sm focus:border-black focus:ring-black/10"
                 >
                   {csvImportConfig.headers.map((header) => (
                     <option key={header.index} value={String(header.index)}>
                       {header.label}
                     </option>
                   ))}
-                </select>
+                </FancySelect>
               </label>
 
               <p className="mb-2 text-xs text-gray-500">
@@ -4431,13 +4762,14 @@ export default function ComposePage() {
                             </label>
                           </td>
                           <td className="px-3 py-2">
-                            <select
+                            <FancySelect
+                              wrapperClassName="w-full"
                               value={selectValue}
                               onChange={(event) =>
                                 updateCsvColumnTarget(header.index, event.target.value)
                               }
                               disabled={isEmailColumn || !header.selected}
-                              className="w-full rounded border border-gray-300 px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-black disabled:cursor-not-allowed disabled:opacity-50"
+                              className="h-8 border-gray-300 text-xs focus:border-black focus:ring-black/10"
                             >
                               <option value={header.normalizedKey}>
                                 {header.normalizedKey}
@@ -4449,7 +4781,7 @@ export default function ComposePage() {
                                     {field}
                                   </option>
                                 ))}
-                            </select>
+                            </FancySelect>
                           </td>
                         </tr>
                       );
@@ -4479,6 +4811,70 @@ export default function ComposePage() {
                 className="rounded bg-black px-3 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {contactsImporting ? "Importing..." : "Import contacts"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {workspaceDeleteConfirmOpen && workspace && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="workspace-delete-title"
+            className="w-full max-w-md rounded-lg bg-white shadow-xl"
+          >
+            <div className="border-b border-gray-200 px-5 py-4">
+              <h2
+                id="workspace-delete-title"
+                className="text-base font-semibold text-gray-900"
+              >
+                Delete Workspace
+              </h2>
+            </div>
+            <div className="px-5 py-4 text-sm text-gray-700">
+              <p>
+                Delete workspace <strong>{workspace.id}</strong>?
+              </p>
+              <p className="mt-2 text-xs text-gray-500">
+                This permanently deletes contacts, history, API keys, settings,
+                and workspace memberships for this domain.
+              </p>
+              <label className="mt-3 block">
+                <span className="text-[11px] text-gray-600">
+                  Type <code className="rounded bg-gray-100 px-1">{workspace.id}</code> to
+                  confirm.
+                </span>
+                <input
+                  type="text"
+                  value={workspaceDeleteConfirmValue}
+                  onChange={(event) =>
+                    setWorkspaceDeleteConfirmValue(event.target.value)
+                  }
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="mt-1 w-full rounded border border-gray-300 px-2 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-black"
+                  placeholder={workspace.id}
+                />
+              </label>
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-gray-200 px-5 py-4">
+              <button
+                type="button"
+                onClick={cancelWorkspaceDelete}
+                disabled={deletingWorkspace}
+                className="rounded border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmWorkspaceDelete()}
+                disabled={deletingWorkspace || !canConfirmWorkspaceDelete}
+                className="rounded bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {deletingWorkspace ? "Deleting..." : "Delete workspace"}
               </button>
             </div>
           </div>
