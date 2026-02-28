@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  getCampaignPerformanceAnalytics,
   getSubjectCampaignAnalytics,
   getTopicDeliveryAnalytics,
   userCanAccessWorkspace,
@@ -28,6 +29,18 @@ export async function GET(req: NextRequest) {
       const limit = Number.isFinite(limitValue) ? limitValue : 50;
       const items = await getSubjectCampaignAnalytics(workspace, { limit });
       return NextResponse.json({ items });
+    }
+
+    if (mode === "campaign") {
+      const subject = req.nextUrl.searchParams.get("subject") ?? "";
+      if (!subject.trim()) {
+        return NextResponse.json(
+          { error: "Missing subject parameter" },
+          { status: 400 }
+        );
+      }
+      const analytics = await getCampaignPerformanceAnalytics(workspace, subject);
+      return NextResponse.json(analytics);
     }
 
     const topic = req.nextUrl.searchParams.get("topic") ?? "";

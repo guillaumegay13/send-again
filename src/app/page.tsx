@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Fragment,
   useState,
   useRef,
   useEffect,
@@ -16,6 +17,7 @@ import { AppSidebar } from "@/components/ui/app-sidebar";
 import { CampaignsShell } from "./campaigns/page";
 
 type Tab = "compose" | "contacts" | "history" | "settings" | "campaigns";
+type HistoryView = "activity" | "performance";
 
 interface Workspace {
   id: string;
@@ -86,14 +88,6 @@ interface HistoryListResponse {
   hasMore: boolean;
 }
 
-interface TopicDeliveryAnalytics {
-  topic: string;
-  totalSends: number;
-  deliveredSends: number;
-  undeliveredSends: number;
-  deliveryRate: number;
-}
-
 interface SubjectCampaignMetric {
   subject: string;
   totalSends: number;
@@ -105,6 +99,34 @@ interface SubjectCampaignMetric {
 
 interface SubjectCampaignMetricsResponse {
   items: SubjectCampaignMetric[];
+}
+
+interface CampaignLinkRecipient {
+  recipient: string;
+  totalClicks: number;
+  lastClickedAt: string;
+}
+
+interface CampaignLinkMetric {
+  url: string;
+  totalClicks: number;
+  uniqueClickers: number;
+  clickRate: number;
+  lastClickedAt: string;
+  recipients: CampaignLinkRecipient[];
+}
+
+interface CampaignPerformanceAnalytics {
+  subject: string;
+  totalSends: number;
+  deliveredSends: number;
+  undeliveredSends: number;
+  openedSends: number;
+  clickedSends: number;
+  deliveryRate: number;
+  openRate: number;
+  clickRate: number;
+  clickedLinks: CampaignLinkMetric[];
 }
 
 const HISTORY_RULES_PAGE_SIZE = 100;
@@ -486,6 +508,278 @@ function formatTimestamp(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Invalid Date";
   return date.toLocaleString();
+}
+
+function formatTimestampOrDash(value: string): string {
+  const formatted = formatTimestamp(value);
+  return formatted === "Invalid Date" ? "-" : formatted;
+}
+
+function getSafeExternalUrl(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function formatRatio(value: number): string {
+  return `${(Math.max(0, Math.min(1, value)) * 100).toFixed(1)}%`;
+}
+
+type CampaignSankeyNode = {
+  id: string;
+  label: string;
+  value: number;
+  column: number;
+  color: string;
+};
+
+type CampaignSankeyLink = {
+  source: string;
+  target: string;
+  value: number;
+  color: string;
+};
+
+type PositionedCampaignSankeyNode = CampaignSankeyNode & {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+type PositionedCampaignSankeyLink = CampaignSankeyLink & {
+  path: string;
+  thickness: number;
+};
+
+function CampaignSankeyDiagram({
+  analytics,
+}: {
+  analytics: CampaignPerformanceAnalytics;
+}) {
+  const total = Math.max(0, Math.floor(analytics.totalSends));
+  if (total <= 0) {
+    return <p className="text-xs text-gray-500">No send volume yet.</p>;
+  }
+
+  const delivered = Math.max(
+    0,
+    Math.min(total, Math.floor(analytics.deliveredSends))
+  );
+  const undelivered = Math.max(0, total - delivered);
+  const opened = Math.max(0, Math.min(delivered, Math.floor(analytics.openedSends)));
+  const notOpened = Math.max(0, delivered - opened);
+  const clicked = Math.max(0, Math.min(opened, Math.floor(analytics.clickedSends)));
+  const openedNoClick = Math.max(0, opened - clicked);
+
+  const rawNodes: CampaignSankeyNode[] = [
+    { id: "sent", label: "Sent", value: total, column: 0, color: "#4F46E5" },
+    {
+      id: "delivered",
+      label: "Delivered",
+      value: delivered,
+      column: 1,
+      color: "#0EA5E9",
+    },
+    {
+      id: "undelivered",
+      label: "Undelivered",
+      value: undelivered,
+      column: 1,
+      color: "#F97316",
+    },
+    { id: "opened", label: "Opened", value: opened, column: 2, color: "#14B8A6" },
+    {
+      id: "not-opened",
+      label: "Not opened",
+      value: notOpened,
+      column: 2,
+      color: "#94A3B8",
+    },
+    { id: "clicked", label: "Clicked", value: clicked, column: 3, color: "#8B5CF6" },
+    {
+      id: "opened-no-click",
+      label: "Opened, no click",
+      value: openedNoClick,
+      column: 3,
+      color: "#C4B5FD",
+    },
+  ];
+
+  const rawLinks: CampaignSankeyLink[] = [
+    { source: "sent", target: "delivered", value: delivered, color: "#A5B4FC" },
+    { source: "sent", target: "undelivered", value: undelivered, color: "#FDBA74" },
+    { source: "delivered", target: "opened", value: opened, color: "#99F6E4" },
+    {
+      source: "delivered",
+      target: "not-opened",
+      value: notOpened,
+      color: "#CBD5E1",
+    },
+    { source: "opened", target: "clicked", value: clicked, color: "#C4B5FD" },
+    {
+      source: "opened",
+      target: "opened-no-click",
+      value: openedNoClick,
+      color: "#DDD6FE",
+    },
+  ];
+
+  const nodes = rawNodes.filter((node) => node.id === "sent" || node.value > 0);
+  const visibleNodeIds = new Set(nodes.map((node) => node.id));
+  const links = rawLinks.filter(
+    (link) =>
+      link.value > 0 &&
+      visibleNodeIds.has(link.source) &&
+      visibleNodeIds.has(link.target)
+  );
+
+  const viewWidth = 900;
+  const viewHeight = 280;
+  const marginTop = 18;
+  const marginRight = 22;
+  const marginBottom = 18;
+  const marginLeft = 22;
+  const nodeWidth = 10;
+  const nodeGap = 10;
+  const contentHeight = viewHeight - marginTop - marginBottom;
+  const maxColumn = nodes.reduce((max, node) => Math.max(max, node.column), 0);
+  const columnStep =
+    maxColumn > 0
+      ? (viewWidth - marginLeft - marginRight - nodeWidth) / maxColumn
+      : 0;
+  const pxPerUnit = contentHeight / total;
+
+  const nodesByColumn = new Map<number, CampaignSankeyNode[]>();
+  for (const node of nodes) {
+    const group = nodesByColumn.get(node.column) ?? [];
+    group.push(node);
+    nodesByColumn.set(node.column, group);
+  }
+
+  const positionedNodes = new Map<string, PositionedCampaignSankeyNode>();
+  for (let column = 0; column <= maxColumn; column += 1) {
+    const columnNodes = nodesByColumn.get(column) ?? [];
+    if (columnNodes.length === 0) continue;
+
+    const stackedHeight =
+      columnNodes.reduce((sum, node) => sum + node.value * pxPerUnit, 0) +
+      nodeGap * Math.max(0, columnNodes.length - 1);
+    let currentY = marginTop + Math.max(0, (contentHeight - stackedHeight) / 2);
+
+    for (const node of columnNodes) {
+      const height = node.value * pxPerUnit;
+      positionedNodes.set(node.id, {
+        ...node,
+        x: marginLeft + column * columnStep,
+        y: currentY,
+        width: nodeWidth,
+        height,
+      });
+      currentY += height + nodeGap;
+    }
+  }
+
+  const sourceOffsets = new Map<string, number>();
+  const targetOffsets = new Map<string, number>();
+  const positionedLinks: PositionedCampaignSankeyLink[] = [];
+  for (const link of links) {
+    const source = positionedNodes.get(link.source);
+    const target = positionedNodes.get(link.target);
+    if (!source || !target) continue;
+
+    const thickness = link.value * pxPerUnit;
+    if (thickness <= 0) continue;
+
+    const sourceOffset = sourceOffsets.get(link.source) ?? 0;
+    const targetOffset = targetOffsets.get(link.target) ?? 0;
+
+    const sx = source.x + source.width;
+    const sy = source.y + sourceOffset + thickness / 2;
+    const tx = target.x;
+    const ty = target.y + targetOffset + thickness / 2;
+    const curve = (tx - sx) * 0.45;
+    const path = `M ${sx} ${sy} C ${sx + curve} ${sy}, ${tx - curve} ${ty}, ${tx} ${ty}`;
+
+    sourceOffsets.set(link.source, sourceOffset + thickness);
+    targetOffsets.set(link.target, targetOffset + thickness);
+    positionedLinks.push({
+      ...link,
+      thickness,
+      path,
+    });
+  }
+
+  const orderedNodes = Array.from(positionedNodes.values()).sort(
+    (a, b) => a.column - b.column || a.y - b.y
+  );
+
+  return (
+    <div>
+      <svg
+        viewBox={`0 0 ${viewWidth} ${viewHeight}`}
+        role="img"
+        aria-label="Campaign flow from sent to delivered, opened, and clicked."
+        className="h-auto w-full"
+      >
+        <rect x={0} y={0} width={viewWidth} height={viewHeight} fill="#F8FAFC" />
+        {positionedLinks.map((link, index) => (
+          <path
+            key={`${link.source}-${link.target}-${index}`}
+            d={link.path}
+            fill="none"
+            stroke={link.color}
+            strokeOpacity={0.62}
+            strokeWidth={Math.max(1, link.thickness)}
+            strokeLinecap="round"
+          />
+        ))}
+        {orderedNodes.map((node) => (
+          <rect
+            key={node.id}
+            x={node.x}
+            y={node.y}
+            width={node.width}
+            height={Math.max(1, node.height)}
+            fill={node.color}
+            rx={3}
+          />
+        ))}
+        {orderedNodes.map((node) => {
+          const isLastColumn = node.column === maxColumn;
+          const textX = isLastColumn ? node.x - 8 : node.x + node.width + 8;
+          const textAnchor = isLastColumn ? "end" : "start";
+          const label = `${node.label}: ${node.value.toLocaleString()} (${formatRatio(
+            node.value / total
+          )})`;
+          return (
+            <text
+              key={`${node.id}-label`}
+              x={textX}
+              y={node.y + node.height / 2}
+              dominantBaseline="middle"
+              textAnchor={textAnchor}
+              fill="#334155"
+              fontSize="12"
+            >
+              {label}
+            </text>
+          );
+        })}
+      </svg>
+      <p className="mt-2 text-[11px] text-gray-500">
+        Sankey view: flow width represents number of recipients.
+      </p>
+    </div>
+  );
 }
 
 type HistoryEventMeta = {
@@ -871,13 +1165,7 @@ export default function ComposePage() {
   const [historySearch, setHistorySearch] = useState("");
   const [historySearchInput, setHistorySearchInput] = useState("");
   const [historyReloadKey, setHistoryReloadKey] = useState(0);
-  const [topicAnalyticsInput, setTopicAnalyticsInput] = useState("");
-  const [topicAnalyticsLoading, setTopicAnalyticsLoading] = useState(false);
-  const [topicAnalyticsError, setTopicAnalyticsError] = useState<string | null>(
-    null
-  );
-  const [topicAnalytics, setTopicAnalytics] =
-    useState<TopicDeliveryAnalytics | null>(null);
+  const [historyView, setHistoryView] = useState<HistoryView>("activity");
   const [subjectMetrics, setSubjectMetrics] = useState<SubjectCampaignMetric[]>(
     []
   );
@@ -885,8 +1173,16 @@ export default function ComposePage() {
   const [subjectMetricsError, setSubjectMetricsError] = useState<string | null>(
     null
   );
-  const [selectedCampaignSubject, setSelectedCampaignSubject] = useState("all");
-  const [topicQuickPicks, setTopicQuickPicks] = useState<string[]>([]);
+  const [selectedCampaignSubject, setSelectedCampaignSubject] = useState("");
+  const [campaignPerformanceLoading, setCampaignPerformanceLoading] =
+    useState(false);
+  const [campaignPerformanceError, setCampaignPerformanceError] =
+    useState<string | null>(null);
+  const [campaignPerformance, setCampaignPerformance] =
+    useState<CampaignPerformanceAnalytics | null>(null);
+  const [expandedClickedUrl, setExpandedClickedUrl] = useState<string | null>(
+    null
+  );
   const [recipientConditions, setRecipientConditions] = useState<
     RecipientCondition[]
   >([]);
@@ -1227,15 +1523,15 @@ export default function ComposePage() {
       setHistoryPageSize(HISTORY_TABLE_PAGE_SIZE);
       setHistorySearch("");
       setHistorySearchInput("");
-      setTopicAnalyticsInput("");
-      setTopicAnalyticsLoading(false);
-      setTopicAnalyticsError(null);
-      setTopicAnalytics(null);
+      setHistoryView("activity");
       setSubjectMetrics([]);
       setSubjectMetricsLoading(false);
       setSubjectMetricsError(null);
-      setSelectedCampaignSubject("all");
-      setTopicQuickPicks([]);
+      setSelectedCampaignSubject("");
+      setCampaignPerformanceLoading(false);
+      setCampaignPerformanceError(null);
+      setCampaignPerformance(null);
+      setExpandedClickedUrl(null);
       setHistoryLoading(false);
       setNamecheapStatus(null);
       setCloudflareStatus(null);
@@ -1297,15 +1593,15 @@ export default function ComposePage() {
     setHistoryPageSize(HISTORY_TABLE_PAGE_SIZE);
     setHistorySearch("");
     setHistorySearchInput("");
-    setTopicAnalyticsInput("");
-    setTopicAnalyticsLoading(false);
-    setTopicAnalyticsError(null);
-    setTopicAnalytics(null);
+    setHistoryView("activity");
     setSubjectMetrics([]);
     setSubjectMetricsLoading(false);
     setSubjectMetricsError(null);
-    setSelectedCampaignSubject("all");
-    setTopicQuickPicks([]);
+    setSelectedCampaignSubject("");
+    setCampaignPerformanceLoading(false);
+    setCampaignPerformanceError(null);
+    setCampaignPerformance(null);
+    setExpandedClickedUrl(null);
     setNamecheapStatus(null);
     setCloudflareStatus(null);
     setRoute53Status(null);
@@ -1419,6 +1715,75 @@ export default function ComposePage() {
       cancelled = true;
     };
   }, [sessionToken, activeId, tab, historyReloadKey, fetchJson]);
+
+  useEffect(() => {
+    if (subjectMetrics.length === 0) {
+      if (selectedCampaignSubject) {
+        setSelectedCampaignSubject("");
+      }
+      return;
+    }
+
+    const selectedExists = subjectMetrics.some(
+      (metric) => metric.subject === selectedCampaignSubject
+    );
+    if (!selectedExists) {
+      setSelectedCampaignSubject(subjectMetrics[0].subject);
+    }
+  }, [selectedCampaignSubject, subjectMetrics]);
+
+  useEffect(() => {
+    if (!sessionToken || !activeId || tab !== "history") return;
+
+    const subject = selectedCampaignSubject.trim();
+    if (!subject) {
+      setCampaignPerformanceLoading(false);
+      setCampaignPerformanceError(null);
+      setCampaignPerformance(null);
+      setExpandedClickedUrl(null);
+      return;
+    }
+
+    let cancelled = false;
+    const params = new URLSearchParams({
+      workspace: activeId,
+      mode: "campaign",
+      subject,
+    });
+
+    setCampaignPerformanceLoading(true);
+    setCampaignPerformanceError(null);
+    setExpandedClickedUrl(null);
+    fetchJson<CampaignPerformanceAnalytics>(
+      `/api/history/analytics?${params.toString()}`
+    )
+      .then((data) => {
+        if (cancelled) return;
+        setCampaignPerformance(data);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        const message = error instanceof Error ? error.message : String(error);
+        setCampaignPerformance(null);
+        setCampaignPerformanceError(message);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setCampaignPerformanceLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    sessionToken,
+    activeId,
+    tab,
+    selectedCampaignSubject,
+    historyReloadKey,
+    fetchJson,
+  ]);
 
   useEffect(() => {
     if (!sessionToken || !activeId) return;
@@ -1763,15 +2128,15 @@ export default function ComposePage() {
     setHistoryPageSize(HISTORY_TABLE_PAGE_SIZE);
     setHistorySearch("");
     setHistorySearchInput("");
-    setTopicAnalyticsInput("");
-    setTopicAnalyticsLoading(false);
-    setTopicAnalyticsError(null);
-    setTopicAnalytics(null);
+    setHistoryView("activity");
     setSubjectMetrics([]);
     setSubjectMetricsLoading(false);
     setSubjectMetricsError(null);
-    setSelectedCampaignSubject("all");
-    setTopicQuickPicks([]);
+    setSelectedCampaignSubject("");
+    setCampaignPerformanceLoading(false);
+    setCampaignPerformanceError(null);
+    setCampaignPerformance(null);
+    setExpandedClickedUrl(null);
     setHistoryLoading(false);
     setWorkspaceMessage(null);
     setNewWorkspaceId("");
@@ -2373,46 +2738,12 @@ export default function ComposePage() {
     historyTotal > 0 && historyRows.length > 0
       ? historyRangeStart + historyRows.length - 1
       : 0;
-  const filteredSubjectMetrics = useMemo(() => {
-    if (selectedCampaignSubject === "all") return subjectMetrics;
-    return subjectMetrics.filter(
-      (metric) => metric.subject === selectedCampaignSubject
-    );
-  }, [selectedCampaignSubject, subjectMetrics]);
-  const filteredSubjectTotals = useMemo(() => {
-    return filteredSubjectMetrics.reduce(
-      (acc, metric) => {
-        acc.totalSends += metric.totalSends;
-        acc.openedSends += metric.openedSends;
-        acc.clickedSends += metric.clickedSends;
-        return acc;
-      },
-      { totalSends: 0, openedSends: 0, clickedSends: 0 }
-    );
-  }, [filteredSubjectMetrics]);
-  const campaignTopicOptions = useMemo(
+  const selectedCampaignMetric = useMemo(
     () =>
-      Array.from(
-        new Set([
-          ...topicQuickPicks,
-          ...subjectMetrics.map((metric) => metric.subject),
-          ...availableSubjects,
-        ])
-      )
-        .map((value) => value.trim())
-        .filter(Boolean),
-    [availableSubjects, subjectMetrics, topicQuickPicks]
+      subjectMetrics.find((metric) => metric.subject === selectedCampaignSubject) ??
+      null,
+    [selectedCampaignSubject, subjectMetrics]
   );
-
-  useEffect(() => {
-    if (selectedCampaignSubject === "all") return;
-    const exists = subjectMetrics.some(
-      (metric) => metric.subject === selectedCampaignSubject
-    );
-    if (!exists) {
-      setSelectedCampaignSubject("all");
-    }
-  }, [selectedCampaignSubject, subjectMetrics]);
 
   function refreshHistoryPage() {
     setHistoryReloadKey((prev) => prev + 1);
@@ -2434,42 +2765,6 @@ export default function ComposePage() {
 
   function formatPercent(value: number): string {
     return `${(Math.max(0, Math.min(1, value)) * 100).toFixed(1)}%`;
-  }
-
-  function submitTopicAnalytics(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!activeId) return;
-
-    const topic = topicAnalyticsInput.trim();
-    if (!topic) {
-      setTopicAnalytics(null);
-      setTopicAnalyticsError("Enter a topic to analyze.");
-      return;
-    }
-
-    const params = new URLSearchParams({
-      workspace: activeId,
-      topic,
-    });
-
-    setTopicAnalyticsLoading(true);
-    setTopicAnalyticsError(null);
-    fetchJson<TopicDeliveryAnalytics>(
-      `/api/history/analytics?${params.toString()}`
-    )
-      .then((data) => {
-        setTopicAnalytics(data);
-        setTopicQuickPicks((prev) => {
-          const merged = [topic, ...prev].filter(Boolean);
-          return Array.from(new Set(merged)).slice(0, 30);
-        });
-      })
-      .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        setTopicAnalytics(null);
-        setTopicAnalyticsError(message);
-      })
-      .finally(() => setTopicAnalyticsLoading(false));
   }
 
   function addFieldCondition() {
@@ -3548,359 +3843,501 @@ export default function ComposePage() {
         )}
 
         {tab === "history" && (
-          <div className="flex-1 p-6 overflow-y-auto">
-            <div className="flex items-center justify-between gap-3 mb-1">
+          <div className="flex-1 overflow-y-auto p-6">
+            <div className="mb-1 flex items-center justify-between gap-3">
               <h1 className="text-xl font-semibold">Send History</h1>
               <button
                 onClick={refreshHistoryPage}
-                disabled={historyLoading || !activeId}
-                className="text-xs text-black hover:underline"
+                disabled={
+                  historyLoading ||
+                  subjectMetricsLoading ||
+                  campaignPerformanceLoading ||
+                  !activeId
+                }
+                className="text-xs text-black hover:underline disabled:cursor-not-allowed disabled:text-gray-400"
               >
-                {historyLoading ? "Refreshing..." : "Refresh"}
+                {historyLoading || subjectMetricsLoading || campaignPerformanceLoading
+                  ? "Refreshing..."
+                  : "Refresh"}
               </button>
             </div>
-            <p className="text-xs text-gray-400 mb-4">{workspace.name}</p>
-            <div className="mb-4 rounded border border-gray-200 bg-gray-50 p-3">
-              <div className="flex flex-wrap items-end justify-between gap-3">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
-                    Campaign metrics by subject
-                  </p>
-                  {!subjectMetricsLoading && !subjectMetricsError && (
-                    <p className="mt-1 text-xs text-gray-500">
-                      {filteredSubjectMetrics.length} visible · {subjectMetrics.length} total
-                    </p>
-                  )}
-                </div>
-                {subjectMetrics.length > 0 && (
-                  <label className="w-full max-w-md space-y-1">
-                    <span className="text-[11px] font-medium uppercase tracking-wide text-gray-500">
-                      Campaign
-                    </span>
-                    <FancySelect
-                      wrapperClassName="w-full"
-                      value={selectedCampaignSubject}
-                      onChange={(event) => setSelectedCampaignSubject(event.target.value)}
-                      className="h-8 border-gray-300 text-xs"
-                    >
-                      <option value="all">All campaigns</option>
-                      {subjectMetrics.map((metric) => (
-                        <option key={metric.subject} value={metric.subject}>
-                          {metric.subject}
-                        </option>
-                      ))}
-                    </FancySelect>
-                  </label>
-                )}
-              </div>
+            <p className="mb-4 text-xs text-gray-400">{workspace.name}</p>
 
-              {subjectMetricsLoading ? (
-                <p className="mt-2 text-xs text-gray-500">Loading metrics...</p>
-              ) : subjectMetricsError ? (
-                <p className="mt-2 text-xs text-red-600">{subjectMetricsError}</p>
-              ) : subjectMetrics.length === 0 ? (
-                <p className="mt-2 text-xs text-gray-500">
-                  No campaign metrics yet for this workspace.
-                </p>
-              ) : (
-                <div className="mt-2">
-                  <div className="mb-2 flex flex-wrap gap-2 text-xs text-gray-600">
-                    <span className="rounded-full border border-gray-300 bg-white px-2 py-0.5">
-                      Sends {filteredSubjectTotals.totalSends}
-                    </span>
-                    <span className="rounded-full border border-gray-300 bg-white px-2 py-0.5">
-                      Open rate{" "}
-                      {formatPercent(
-                        filteredSubjectTotals.totalSends > 0
-                          ? filteredSubjectTotals.openedSends /
-                              filteredSubjectTotals.totalSends
-                          : 0
-                      )}
-                    </span>
-                    <span className="rounded-full border border-gray-300 bg-white px-2 py-0.5">
-                      CTR{" "}
-                      {formatPercent(
-                        filteredSubjectTotals.totalSends > 0
-                          ? filteredSubjectTotals.clickedSends /
-                              filteredSubjectTotals.totalSends
-                          : 0
-                      )}
-                    </span>
-                  </div>
-                  <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="border-b border-gray-200 text-gray-500">
-                        <th className="px-2 py-1.5 text-left font-semibold">Subject</th>
-                        <th className="px-2 py-1.5 text-right font-semibold">Sends</th>
-                        <th className="px-2 py-1.5 text-right font-semibold">Open rate</th>
-                        <th className="px-2 py-1.5 text-right font-semibold">CTR</th>
-                        <th className="px-2 py-1.5 text-right font-semibold">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredSubjectMetrics.map((metric) => (
-                        <tr key={metric.subject} className="border-b border-gray-100 last:border-0">
-                          <td className="max-w-[28rem] truncate px-2 py-1.5 text-gray-700">
-                            {metric.subject}
-                          </td>
-                          <td className="px-2 py-1.5 text-right text-gray-700">
-                            {metric.totalSends}
-                          </td>
-                          <td className="px-2 py-1.5 text-right text-gray-700">
-                            {formatPercent(metric.openRate)} ({metric.openedSends})
-                          </td>
-                          <td className="px-2 py-1.5 text-right text-gray-700">
-                            {formatPercent(metric.ctr)} ({metric.clickedSends})
-                          </td>
-                          <td className="px-2 py-1.5 text-right">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setTopicAnalyticsInput(metric.subject);
-                                setTopicAnalyticsError(null);
-                                setTopicQuickPicks((prev) =>
-                                  Array.from(new Set([metric.subject, ...prev])).slice(0, 30)
-                                );
-                              }}
-                              className="rounded border border-gray-300 px-2 py-1 text-[11px] font-medium text-gray-700 hover:bg-gray-100"
-                            >
-                              Use topic
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                </div>
-              )}
-            </div>
-            <form
-              onSubmit={submitTopicAnalytics}
-              className="mb-4 rounded border border-gray-200 bg-gray-50 p-3"
-            >
-              <div className="flex flex-wrap items-end gap-2">
-                <label className="w-full max-w-md space-y-1">
-                  <span
-                    id="topic-analytics"
-                    className="text-xs font-semibold uppercase tracking-wide text-gray-500"
-                  >
-                    Topic delivery rate
-                  </span>
-                  <input
-                    type="text"
-                    value={topicAnalyticsInput}
-                    onChange={(event) => {
-                      setTopicAnalyticsInput(event.target.value);
-                      if (topicAnalyticsError) {
-                        setTopicAnalyticsError(null);
-                      }
-                    }}
-                    placeholder="e.g. onboarding, launch, follow-up"
-                    className="w-full rounded border border-gray-300 bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
-                  />
-                </label>
-                <label className="w-full max-w-md space-y-1">
-                  <span className="text-[11px] font-medium uppercase tracking-wide text-gray-500">
-                    Existing campaigns/topics
-                  </span>
-                  <FancySelect
-                    wrapperClassName="w-full"
-                    value={
-                      campaignTopicOptions.includes(topicAnalyticsInput.trim())
-                        ? topicAnalyticsInput.trim()
-                        : ""
-                    }
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      if (!value) return;
-                      setTopicAnalyticsInput(value);
-                      setTopicAnalyticsError(null);
-                    }}
-                    className="h-8 border-gray-300 text-xs"
-                  >
-                    <option value="">Select existing...</option>
-                    {campaignTopicOptions.map((topic) => (
-                      <option key={topic} value={topic}>
-                        {topic}
-                      </option>
-                    ))}
-                  </FancySelect>
-                </label>
-                <button
-                  type="submit"
-                  disabled={topicAnalyticsLoading || !activeId}
-                  className="rounded border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {topicAnalyticsLoading ? "Calculating..." : "Calculate"}
-                </button>
-              </div>
-              {topicAnalyticsError && (
-                <p className="mt-2 text-xs text-red-600">{topicAnalyticsError}</p>
-              )}
-              {topicAnalytics && !topicAnalyticsError && (
-                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-600">
-                  <p>
-                    Delivery rate:{" "}
-                    <span className="font-semibold text-gray-900">
-                      {formatPercent(topicAnalytics.deliveryRate)}
-                    </span>
-                  </p>
-                  <p>
-                    Delivered {topicAnalytics.deliveredSends} /{" "}
-                    {topicAnalytics.totalSends}
-                  </p>
-                  <p>Undelivered {topicAnalytics.undeliveredSends}</p>
-                  {topicAnalytics.topic && (
-                    <p className="text-gray-500">
-                      Topic: <span className="font-medium text-gray-700">{topicAnalytics.topic}</span>
-                    </p>
-                  )}
-                </div>
-              )}
-            </form>
-            <form onSubmit={submitHistorySearch} className="mb-4 flex flex-wrap items-center gap-2">
-              <input
-                type="search"
-                value={historySearchInput}
-                onChange={(event) => setHistorySearchInput(event.target.value)}
-                placeholder="Search recipient, subject, or message ID"
-                className="w-full max-w-md rounded border border-gray-300 bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
-              />
-              <button
-                type="submit"
-                className="rounded border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-100"
-              >
-                Search
-              </button>
-              {(historySearch || historySearchInput) && (
+            <div className="mb-4">
+              <div className={segmentedSetClass()}>
                 <button
                   type="button"
-                  onClick={clearHistorySearch}
-                  className="rounded border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-500 hover:bg-gray-100"
+                  onClick={() => setHistoryView("activity")}
+                  className={segmentedButtonClass(historyView === "activity")}
                 >
-                  Clear
+                  Activity
                 </button>
-              )}
-            </form>
+                <button
+                  type="button"
+                  onClick={() => setHistoryView("performance")}
+                  className={segmentedButtonClass(historyView === "performance")}
+                >
+                  Campaign Performance
+                </button>
+              </div>
+            </div>
 
-            {historyLoading ? (
-              <p className="text-sm text-gray-400">Loading...</p>
-            ) : historyRows.length === 0 ? (
-              <p className="text-sm text-gray-400">
-                {historySearch
-                  ? "No history results match your search."
-                  : "No emails sent yet from this workspace."}
-              </p>
+            {historyView === "performance" ? (
+              <div className="space-y-4">
+                <div className="rounded border border-gray-200 bg-gray-50 p-3">
+                  <div className="flex flex-wrap items-end justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                        Campaign selector
+                      </p>
+                      <p className="mt-1 text-xs text-gray-500">
+                        Pick a campaign to inspect delivery, opens, clicks, and clicked links.
+                      </p>
+                    </div>
+                    <label className="w-full max-w-lg space-y-1">
+                      <span className="text-[11px] font-medium uppercase tracking-wide text-gray-500">
+                        Campaign (subject)
+                      </span>
+                      <FancySelect
+                        wrapperClassName="w-full"
+                        value={selectedCampaignSubject}
+                        onChange={(event) => setSelectedCampaignSubject(event.target.value)}
+                        disabled={subjectMetricsLoading || subjectMetrics.length === 0}
+                        className="h-8 border-gray-300 text-xs"
+                      >
+                        {subjectMetrics.length === 0 ? (
+                          <option value="">No campaigns yet</option>
+                        ) : (
+                          subjectMetrics.map((metric) => (
+                            <option key={metric.subject} value={metric.subject}>
+                              {metric.subject}
+                            </option>
+                          ))
+                        )}
+                      </FancySelect>
+                    </label>
+                  </div>
+
+                  {subjectMetricsLoading ? (
+                    <p className="mt-3 text-xs text-gray-500">Loading campaigns...</p>
+                  ) : subjectMetricsError ? (
+                    <p className="mt-3 text-xs text-red-600">{subjectMetricsError}</p>
+                  ) : subjectMetrics.length === 0 ? (
+                    <p className="mt-3 text-xs text-gray-500">
+                      No campaign metrics yet for this workspace.
+                    </p>
+                  ) : (
+                    <div className="mt-3 overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b border-gray-200 text-gray-500">
+                            <th className="px-2 py-1.5 text-left font-semibold">Campaign</th>
+                            <th className="px-2 py-1.5 text-right font-semibold">Sends</th>
+                            <th className="px-2 py-1.5 text-right font-semibold">
+                              Open rate (sent)
+                            </th>
+                            <th className="px-2 py-1.5 text-right font-semibold">
+                              Click rate (sent)
+                            </th>
+                            <th className="px-2 py-1.5 text-right font-semibold">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {subjectMetrics.map((metric) => {
+                            const active = metric.subject === selectedCampaignSubject;
+                            return (
+                              <tr
+                                key={metric.subject}
+                                className={`border-b border-gray-100 last:border-0 ${
+                                  active ? "bg-white" : ""
+                                }`}
+                              >
+                                <td className="max-w-[28rem] truncate px-2 py-1.5 text-gray-700">
+                                  {metric.subject}
+                                </td>
+                                <td className="px-2 py-1.5 text-right text-gray-700">
+                                  {metric.totalSends}
+                                </td>
+                                <td className="px-2 py-1.5 text-right text-gray-700">
+                                  {formatPercent(metric.openRate)} ({metric.openedSends})
+                                </td>
+                                <td className="px-2 py-1.5 text-right text-gray-700">
+                                  {formatPercent(metric.ctr)} ({metric.clickedSends})
+                                </td>
+                                <td className="px-2 py-1.5 text-right">
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedCampaignSubject(metric.subject)}
+                                    className={`rounded border px-2 py-1 text-[11px] font-medium ${
+                                      active
+                                        ? "border-black bg-black text-white"
+                                        : "border-gray-300 text-gray-700 hover:bg-gray-100"
+                                    }`}
+                                  >
+                                    {active ? "Selected" : "View"}
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                {campaignPerformanceLoading ? (
+                  <p className="text-sm text-gray-500">Loading campaign performance...</p>
+                ) : campaignPerformanceError ? (
+                  <p className="text-sm text-red-600">{campaignPerformanceError}</p>
+                ) : campaignPerformance ? (
+                  <>
+                    <div className="rounded border border-gray-200 bg-white p-4">
+                      <p className="mb-1 text-sm font-semibold text-gray-900">
+                        {campaignPerformance.subject}
+                      </p>
+                      <p className="mb-3 text-xs text-gray-500">
+                        Open and click rates are calculated from delivered sends.
+                      </p>
+                      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                        <div className="rounded border border-gray-200 bg-gray-50 p-3">
+                          <p className="text-[11px] uppercase tracking-wide text-gray-500">Sent</p>
+                          <p className="mt-1 text-lg font-semibold text-gray-900">
+                            {campaignPerformance.totalSends}
+                          </p>
+                        </div>
+                        <div className="rounded border border-gray-200 bg-gray-50 p-3">
+                          <p className="text-[11px] uppercase tracking-wide text-gray-500">
+                            Delivered
+                          </p>
+                          <p className="mt-1 text-lg font-semibold text-gray-900">
+                            {formatPercent(campaignPerformance.deliveryRate)}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            {campaignPerformance.deliveredSends} / {campaignPerformance.totalSends}
+                          </p>
+                        </div>
+                        <div className="rounded border border-gray-200 bg-gray-50 p-3">
+                          <p className="text-[11px] uppercase tracking-wide text-gray-500">Opened</p>
+                          <p className="mt-1 text-lg font-semibold text-gray-900">
+                            {formatPercent(campaignPerformance.openRate)}
+                          </p>
+                          <p className="text-xs text-gray-500">{campaignPerformance.openedSends}</p>
+                        </div>
+                        <div className="rounded border border-gray-200 bg-gray-50 p-3">
+                          <p className="text-[11px] uppercase tracking-wide text-gray-500">Clicked</p>
+                          <p className="mt-1 text-lg font-semibold text-gray-900">
+                            {formatPercent(campaignPerformance.clickRate)}
+                          </p>
+                          <p className="text-xs text-gray-500">{campaignPerformance.clickedSends}</p>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 rounded border border-gray-200 bg-gray-50 p-3">
+                        <CampaignSankeyDiagram analytics={campaignPerformance} />
+                      </div>
+                    </div>
+
+                    <div className="rounded border border-gray-200 bg-white p-4">
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-gray-900">
+                            Clicked links
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            Unique clickers are deduplicated by recipient email.
+                          </p>
+                        </div>
+                      </div>
+                      {campaignPerformance.clickedLinks.length === 0 ? (
+                        <p className="text-sm text-gray-500">
+                          No link clicks recorded for this campaign yet.
+                        </p>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="border-b border-gray-200 text-gray-500">
+                                <th className="px-2 py-1.5 text-left font-semibold">URL</th>
+                                <th className="px-2 py-1.5 text-right font-semibold">
+                                  Unique clickers
+                                </th>
+                                <th className="px-2 py-1.5 text-right font-semibold">
+                                  Total clicks
+                                </th>
+                                <th className="px-2 py-1.5 text-right font-semibold">
+                                  Click rate
+                                </th>
+                                <th className="px-2 py-1.5 text-right font-semibold">
+                                  Last clicked
+                                </th>
+                                <th className="px-2 py-1.5 text-right font-semibold">Drill down</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {campaignPerformance.clickedLinks.map((link) => {
+                                const isExpanded = expandedClickedUrl === link.url;
+                                const safeUrl = getSafeExternalUrl(link.url);
+                                return (
+                                  <Fragment key={link.url}>
+                                    <tr className="border-b border-gray-100">
+                                      <td className="max-w-[30rem] px-2 py-1.5">
+                                        {safeUrl ? (
+                                          <a
+                                            href={safeUrl}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="block truncate text-blue-700 hover:underline"
+                                            title={link.url}
+                                          >
+                                            {link.url}
+                                          </a>
+                                        ) : (
+                                          <span className="block truncate text-gray-700" title={link.url}>
+                                            {link.url}
+                                          </span>
+                                        )}
+                                      </td>
+                                      <td className="px-2 py-1.5 text-right text-gray-700">
+                                        {link.uniqueClickers}
+                                      </td>
+                                      <td className="px-2 py-1.5 text-right text-gray-700">
+                                        {link.totalClicks}
+                                      </td>
+                                      <td className="px-2 py-1.5 text-right text-gray-700">
+                                        {formatPercent(link.clickRate)}
+                                      </td>
+                                      <td className="whitespace-nowrap px-2 py-1.5 text-right text-gray-700">
+                                        {formatTimestampOrDash(link.lastClickedAt)}
+                                      </td>
+                                      <td className="px-2 py-1.5 text-right">
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setExpandedClickedUrl((current) =>
+                                              current === link.url ? null : link.url
+                                            )
+                                          }
+                                          className="rounded border border-gray-300 px-2 py-1 text-[11px] font-medium text-gray-700 hover:bg-gray-100"
+                                        >
+                                          {isExpanded ? "Hide recipients" : "View recipients"}
+                                        </button>
+                                      </td>
+                                    </tr>
+                                    {isExpanded && (
+                                      <tr className="border-b border-gray-100 bg-gray-50">
+                                        <td colSpan={6} className="px-3 py-2">
+                                          {link.recipients.length === 0 ? (
+                                            <p className="text-xs text-gray-500">
+                                              No recipient details found.
+                                            </p>
+                                          ) : (
+                                            <div className="overflow-x-auto">
+                                              <table className="w-full text-xs">
+                                                <thead>
+                                                  <tr className="border-b border-gray-200 text-gray-500">
+                                                    <th className="px-2 py-1 text-left font-semibold">
+                                                      Recipient
+                                                    </th>
+                                                    <th className="px-2 py-1 text-right font-semibold">
+                                                      Clicks
+                                                    </th>
+                                                    <th className="px-2 py-1 text-right font-semibold">
+                                                      Last clicked
+                                                    </th>
+                                                  </tr>
+                                                </thead>
+                                                <tbody>
+                                                  {link.recipients.slice(0, 25).map((recipient) => (
+                                                    <tr
+                                                      key={`${link.url}-${recipient.recipient}`}
+                                                      className="border-b border-gray-100 last:border-0"
+                                                    >
+                                                      <td className="px-2 py-1 font-mono text-gray-700">
+                                                        {recipient.recipient}
+                                                      </td>
+                                                      <td className="px-2 py-1 text-right text-gray-700">
+                                                        {recipient.totalClicks}
+                                                      </td>
+                                                      <td className="px-2 py-1 text-right text-gray-700">
+                                                        {formatTimestampOrDash(recipient.lastClickedAt)}
+                                                      </td>
+                                                    </tr>
+                                                  ))}
+                                                </tbody>
+                                              </table>
+                                              {link.recipients.length > 25 && (
+                                                <p className="mt-2 text-[11px] text-gray-500">
+                                                  Showing 25 of {link.recipients.length} recipients.
+                                                </p>
+                                              )}
+                                            </div>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    )}
+                                  </Fragment>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                ) : selectedCampaignMetric ? (
+                  <p className="text-sm text-gray-500">
+                    Select a campaign to load delivery and clicked-link analytics.
+                  </p>
+                ) : null}
+              </div>
             ) : (
               <>
-                <div className="border border-gray-200 rounded overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="bg-gray-50 border-b border-gray-200">
-                        <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Recipient
-                        </th>
-                        <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Subject
-                        </th>
-                        <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider w-40">
-                          Sent
-                        </th>
-                        <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Status
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {historyRows.map((item) => {
-                        const visibleEvents = getHistoryEventsForDisplay(item.events);
-                        return (
-                          <tr
-                            key={item.messageId}
-                            className="border-b border-gray-100 last:border-0 hover:bg-gray-50"
-                          >
-                            <td className="px-3 py-2 font-mono text-sm">
-                              {item.recipient}
-                            </td>
-                            <td className="px-3 py-2 text-sm truncate max-w-xs">
-                              {item.subject}
-                            </td>
-                            <td className="px-3 py-2 text-sm text-gray-500 whitespace-nowrap">
-                              {formatTimestamp(item.sentAt)}
-                            </td>
-                            <td className="px-3 py-2">
-                              <div className="flex flex-wrap gap-1">
-                                {visibleEvents.map((event) => {
-                                  const meta = HISTORY_EVENT_META[event.type];
-                                  return (
-                                    <span
-                                      key={`${item.messageId}-${event.type}`}
-                                      title={formatHistoryEventTooltip(event)}
-                                      className={`inline-block px-1.5 py-0.5 text-xs rounded ${
-                                        meta?.className ?? "bg-gray-100 text-gray-600"
-                                      }`}
-                                    >
-                                      {meta?.label ?? event.type}
-                                    </span>
-                                  );
-                                })}
-                                {visibleEvents.length === 0 && (
-                                  <span className="inline-block px-1.5 py-0.5 text-xs rounded bg-gray-100 text-gray-400">
-                                    Pending
-                                  </span>
-                                )}
-                              </div>
-                              {visibleEvents.some((event) => event.detail.trim().length > 0) && (
-                                <p className="mt-1 text-[11px] text-gray-500 leading-snug">
-                                  {visibleEvents
-                                    .filter((event) => event.detail.trim().length > 0)
-                                    .map((event) => {
-                                      const label = HISTORY_EVENT_META[event.type]?.label ?? event.type;
-                                      return `${label}: ${event.detail.trim()}`;
-                                    })
-                                    .join(" · ")}
-                                </p>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500">
-                  <p>
-                    Showing {historyRangeStart}-{historyRangeEnd} of {historyTotal}
-                    {historySearch ? ` results for "${historySearch}"` : ""}
+                <form
+                  onSubmit={submitHistorySearch}
+                  className="mb-4 flex flex-wrap items-center gap-2"
+                >
+                  <input
+                    type="search"
+                    value={historySearchInput}
+                    onChange={(event) => setHistorySearchInput(event.target.value)}
+                    placeholder="Search recipient, subject, or message ID"
+                    className="w-full max-w-md rounded border border-gray-300 bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
+                  />
+                  <button
+                    type="submit"
+                    className="rounded border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-100"
+                  >
+                    Search
+                  </button>
+                  {(historySearch || historySearchInput) && (
+                    <button
+                      type="button"
+                      onClick={clearHistorySearch}
+                      className="rounded border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-500 hover:bg-gray-100"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </form>
+
+                {historyLoading ? (
+                  <p className="text-sm text-gray-400">Loading...</p>
+                ) : historyRows.length === 0 ? (
+                  <p className="text-sm text-gray-400">
+                    {historySearch
+                      ? "No history results match your search."
+                      : "No emails sent yet from this workspace."}
                   </p>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setHistoryPage((prev) => Math.max(1, prev - 1))}
-                      disabled={historyLoading || historyPage <= 1}
-                      className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Previous
-                    </button>
-                    <span>
-                      Page {historyPage} of {historyTotalPages}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setHistoryPage((prev) =>
-                          Math.min(historyTotalPages, prev + 1)
-                        )
-                      }
-                      disabled={historyLoading || historyPage >= historyTotalPages}
-                      className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Next
-                    </button>
-                  </div>
-                </div>
+                ) : (
+                  <>
+                    <div className="overflow-x-auto rounded border border-gray-200">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-gray-200 bg-gray-50">
+                            <th className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                              Recipient
+                            </th>
+                            <th className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                              Subject
+                            </th>
+                            <th className="w-40 px-3 py-2 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                              Sent
+                            </th>
+                            <th className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                              Status
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {historyRows.map((item) => {
+                            const visibleEvents = getHistoryEventsForDisplay(item.events);
+                            return (
+                              <tr
+                                key={item.messageId}
+                                className="border-b border-gray-100 last:border-0 hover:bg-gray-50"
+                              >
+                                <td className="px-3 py-2 font-mono text-sm">{item.recipient}</td>
+                                <td className="max-w-xs truncate px-3 py-2 text-sm">
+                                  {item.subject}
+                                </td>
+                                <td className="whitespace-nowrap px-3 py-2 text-sm text-gray-500">
+                                  {formatTimestamp(item.sentAt)}
+                                </td>
+                                <td className="px-3 py-2">
+                                  <div className="flex flex-wrap gap-1">
+                                    {visibleEvents.map((event) => {
+                                      const meta = HISTORY_EVENT_META[event.type];
+                                      return (
+                                        <span
+                                          key={`${item.messageId}-${event.type}`}
+                                          title={formatHistoryEventTooltip(event)}
+                                          className={`inline-block rounded px-1.5 py-0.5 text-xs ${
+                                            meta?.className ?? "bg-gray-100 text-gray-600"
+                                          }`}
+                                        >
+                                          {meta?.label ?? event.type}
+                                        </span>
+                                      );
+                                    })}
+                                    {visibleEvents.length === 0 && (
+                                      <span className="inline-block rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-400">
+                                        Pending
+                                      </span>
+                                    )}
+                                  </div>
+                                  {visibleEvents.some(
+                                    (event) => event.detail.trim().length > 0
+                                  ) && (
+                                    <p className="mt-1 text-[11px] leading-snug text-gray-500">
+                                      {visibleEvents
+                                        .filter((event) => event.detail.trim().length > 0)
+                                        .map((event) => {
+                                          const label =
+                                            HISTORY_EVENT_META[event.type]?.label ?? event.type;
+                                          return `${label}: ${event.detail.trim()}`;
+                                        })
+                                        .join(" · ")}
+                                    </p>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500">
+                      <p>
+                        Showing {historyRangeStart}-{historyRangeEnd} of {historyTotal}
+                        {historySearch ? ` results for "${historySearch}"` : ""}
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setHistoryPage((prev) => Math.max(1, prev - 1))}
+                          disabled={historyLoading || historyPage <= 1}
+                          className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Previous
+                        </button>
+                        <span>
+                          Page {historyPage} of {historyTotalPages}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setHistoryPage((prev) => Math.min(historyTotalPages, prev + 1))
+                          }
+                          disabled={historyLoading || historyPage >= historyTotalPages}
+                          className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Next
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
               </>
             )}
           </div>

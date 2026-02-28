@@ -869,6 +869,34 @@ export interface SubjectCampaignAnalytics {
   ctr: number;
 }
 
+export interface CampaignLinkRecipientAnalytics {
+  recipient: string;
+  totalClicks: number;
+  lastClickedAt: string;
+}
+
+export interface CampaignLinkAnalytics {
+  url: string;
+  totalClicks: number;
+  uniqueClickers: number;
+  clickRate: number;
+  lastClickedAt: string;
+  recipients: CampaignLinkRecipientAnalytics[];
+}
+
+export interface CampaignPerformanceAnalytics {
+  subject: string;
+  totalSends: number;
+  deliveredSends: number;
+  undeliveredSends: number;
+  openedSends: number;
+  clickedSends: number;
+  deliveryRate: number;
+  openRate: number;
+  clickRate: number;
+  clickedLinks: CampaignLinkAnalytics[];
+}
+
 interface SendRow {
   message_id: string;
   recipient: string;
@@ -1230,6 +1258,222 @@ export async function getSubjectCampaignAnalytics(
       openRate: totalSends > 0 ? openedSends / totalSends : 0,
       ctr: totalSends > 0 ? clickedSends / totalSends : 0,
     }));
+}
+
+export async function getCampaignPerformanceAnalytics(
+  workspaceId: string,
+  subject: string
+): Promise<CampaignPerformanceAnalytics> {
+  const db = getDb();
+  const normalizedSubject = normalizeSubject(subject);
+  const pageSize = 1000;
+
+  const sendsForSubject: Array<{ messageId: string; recipient: string }> = [];
+  let from = 0;
+  while (true) {
+    const { data: sendsData, error: sendsError } = await db
+      .from("sends")
+      .select("message_id, recipient, subject, sent_at")
+      .eq("workspace_id", workspaceId)
+      .order("sent_at", { ascending: false })
+      .range(from, from + pageSize - 1);
+    assertNoError(sendsError, "Failed to fetch sends for campaign analytics");
+
+    const sends = (sendsData ?? []) as SendRow[];
+    if (sends.length === 0) break;
+
+    for (const send of sends) {
+      if (normalizeSubject(send.subject) !== normalizedSubject) continue;
+      const messageId = (send.message_id ?? "").trim();
+      if (!messageId) continue;
+      sendsForSubject.push({
+        messageId,
+        recipient: (send.recipient ?? "").trim(),
+      });
+    }
+
+    from += sends.length;
+    if (sends.length < pageSize) break;
+  }
+
+  const uniqueMessageIds = Array.from(
+    new Set(sendsForSubject.map((send) => send.messageId).filter(Boolean))
+  );
+  if (uniqueMessageIds.length === 0) {
+    return {
+      subject: normalizedSubject,
+      totalSends: 0,
+      deliveredSends: 0,
+      undeliveredSends: 0,
+      openedSends: 0,
+      clickedSends: 0,
+      deliveryRate: 0,
+      openRate: 0,
+      clickRate: 0,
+      clickedLinks: [],
+    };
+  }
+
+  const recipientByMessageId = new Map<string, string>();
+  for (const send of sendsForSubject) {
+    if (!send.recipient) continue;
+    recipientByMessageId.set(send.messageId, send.recipient);
+  }
+
+  const byMessageId = new Map<
+    string,
+    { delivered: boolean; opened: boolean; clicked: boolean }
+  >();
+  const linkAggregates = new Map<
+    string,
+    {
+      url: string;
+      totalClicks: number;
+      lastClickedAtTs: number;
+      recipientsByKey: Map<
+        string,
+        { recipient: string; totalClicks: number; lastClickedAtTs: number }
+      >;
+    }
+  >();
+
+  for (const ids of chunkArray(uniqueMessageIds, MESSAGE_ID_IN_QUERY_CHUNK_SIZE)) {
+    if (ids.length === 0) continue;
+    const { data: eventsData, error: eventsError } = await db
+      .from("email_events")
+      .select("message_id, event_type, timestamp, detail")
+      .in("message_id", ids);
+    assertNoError(eventsError, "Failed to fetch events for campaign analytics");
+
+    for (const row of (eventsData ?? []) as EventRow[]) {
+      const messageId = row.message_id?.trim();
+      if (!messageId) continue;
+      const eventType = (row.event_type ?? "").trim().toLowerCase();
+      const eventTimestamp = Date.parse(row.timestamp ?? "");
+
+      const messageAggregate = byMessageId.get(messageId) ?? {
+        delivered: false,
+        opened: false,
+        clicked: false,
+      };
+      if (eventType === "delivery") {
+        messageAggregate.delivered = true;
+      } else if (eventType === "open") {
+        messageAggregate.opened = true;
+      } else if (eventType === "click") {
+        messageAggregate.clicked = true;
+        const url = (row.detail ?? "").trim();
+        if (url) {
+          const linkAggregate = linkAggregates.get(url) ?? {
+            url,
+            totalClicks: 0,
+            lastClickedAtTs: 0,
+            recipientsByKey: new Map<
+              string,
+              { recipient: string; totalClicks: number; lastClickedAtTs: number }
+            >(),
+          };
+
+          linkAggregate.totalClicks += 1;
+          if (
+            Number.isFinite(eventTimestamp) &&
+            eventTimestamp > linkAggregate.lastClickedAtTs
+          ) {
+            linkAggregate.lastClickedAtTs = eventTimestamp;
+          }
+
+          const recipient = recipientByMessageId.get(messageId) ?? "";
+          const recipientKey = recipient.trim().toLowerCase();
+          if (recipientKey) {
+            const recipientAggregate =
+              linkAggregate.recipientsByKey.get(recipientKey) ?? {
+                recipient,
+                totalClicks: 0,
+                lastClickedAtTs: 0,
+              };
+            recipientAggregate.totalClicks += 1;
+            if (
+              Number.isFinite(eventTimestamp) &&
+              eventTimestamp > recipientAggregate.lastClickedAtTs
+            ) {
+              recipientAggregate.lastClickedAtTs = eventTimestamp;
+            }
+            linkAggregate.recipientsByKey.set(recipientKey, recipientAggregate);
+          }
+
+          linkAggregates.set(url, linkAggregate);
+        }
+      }
+      byMessageId.set(messageId, messageAggregate);
+    }
+  }
+
+  let deliveredSends = 0;
+  let openedSends = 0;
+  let clickedSends = 0;
+  for (const messageId of uniqueMessageIds) {
+    const aggregate = byMessageId.get(messageId);
+    if (aggregate?.delivered) deliveredSends += 1;
+    if (aggregate?.opened) openedSends += 1;
+    if (aggregate?.clicked) clickedSends += 1;
+  }
+
+  const totalSends = uniqueMessageIds.length;
+  const undeliveredSends = Math.max(0, totalSends - deliveredSends);
+  const deliveryRate = totalSends > 0 ? deliveredSends / totalSends : 0;
+  const openRate = deliveredSends > 0 ? openedSends / deliveredSends : 0;
+  const clickRate = deliveredSends > 0 ? clickedSends / deliveredSends : 0;
+
+  const clickedLinks = Array.from(linkAggregates.values())
+    .map((aggregate) => {
+      const recipients = Array.from(aggregate.recipientsByKey.values())
+        .sort(
+          (a, b) =>
+            b.totalClicks - a.totalClicks ||
+            b.lastClickedAtTs - a.lastClickedAtTs ||
+            a.recipient.localeCompare(b.recipient)
+        )
+        .map((recipientAggregate) => ({
+          recipient: recipientAggregate.recipient,
+          totalClicks: recipientAggregate.totalClicks,
+          lastClickedAt:
+            recipientAggregate.lastClickedAtTs > 0
+              ? new Date(recipientAggregate.lastClickedAtTs).toISOString()
+              : "",
+        }));
+
+      return {
+        url: aggregate.url,
+        totalClicks: aggregate.totalClicks,
+        uniqueClickers: aggregate.recipientsByKey.size,
+        clickRate:
+          deliveredSends > 0 ? aggregate.recipientsByKey.size / deliveredSends : 0,
+        lastClickedAt:
+          aggregate.lastClickedAtTs > 0
+            ? new Date(aggregate.lastClickedAtTs).toISOString()
+            : "",
+        recipients,
+      };
+    })
+    .sort(
+      (a, b) =>
+        b.uniqueClickers - a.uniqueClickers ||
+        b.totalClicks - a.totalClicks ||
+        b.lastClickedAt.localeCompare(a.lastClickedAt)
+    );
+
+  return {
+    subject: normalizedSubject,
+    totalSends,
+    deliveredSends,
+    undeliveredSends,
+    openedSends,
+    clickedSends,
+    deliveryRate,
+    openRate,
+    clickRate,
+    clickedLinks,
+  };
 }
 
 export type SendJobStatus =
