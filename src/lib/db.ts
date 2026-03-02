@@ -250,6 +250,10 @@ interface WorkspaceOwnerMembershipRow {
   workspace_id: string;
 }
 
+interface WorkspaceMemberUserRow {
+  user_id: string;
+}
+
 export async function ensureWorkspaceMemberships(
   userId: string,
   workspaceIds: string[],
@@ -317,6 +321,37 @@ export async function userIsWorkspaceOwner(
   assertNoError(error, "Failed to check workspace ownership");
   const rows = (data ?? []) as WorkspaceOwnerMembershipRow[];
   return rows.length > 0;
+}
+
+export async function getPreferredWorkspaceUserId(
+  workspaceId: string
+): Promise<string | null> {
+  const db = getDb();
+
+  const { data: ownerData, error: ownerError } = await db
+    .from("workspace_memberships")
+    .select("user_id")
+    .eq("workspace_id", workspaceId)
+    .eq("role", "owner")
+    .order("created_at", { ascending: true })
+    .limit(1);
+  assertNoError(ownerError, "Failed to resolve workspace owner");
+
+  const owner = (ownerData ?? [])[0] as WorkspaceMemberUserRow | undefined;
+  if (owner?.user_id) {
+    return owner.user_id;
+  }
+
+  const { data: memberData, error: memberError } = await db
+    .from("workspace_memberships")
+    .select("user_id")
+    .eq("workspace_id", workspaceId)
+    .order("created_at", { ascending: true })
+    .limit(1);
+  assertNoError(memberError, "Failed to resolve workspace member");
+
+  const member = (memberData ?? [])[0] as WorkspaceMemberUserRow | undefined;
+  return member?.user_id ?? null;
 }
 
 export async function deleteWorkspaceData(workspaceId: string): Promise<void> {
@@ -1801,46 +1836,28 @@ export async function getSendJobForUser(
   const row = (data ?? [])[0];
   if (!row) return null;
 
-  const normalized = normalizeSendJobRow(row as SendJobRowRaw);
+  return buildSendJobProgressFromRow(db, row as SendJobRowRaw);
+}
 
-  const { data: errorRows, error: errorRowsError } = await db
-    .from("send_job_recipients")
-    .select("recipient,error")
-    .eq("job_id", jobId)
-    .eq("status", "failed")
-    .order("id", { ascending: false })
-    .limit(5);
-  assertNoError(errorRowsError, "Failed to load send job errors");
+export async function getSendJobForWorkspace(
+  jobId: string,
+  workspaceId: string
+): Promise<SendJobProgress | null> {
+  const db = getDb();
+  const { data, error } = await db
+    .from("send_jobs")
+    .select(
+      "id, user_id, workspace_id, status, total, sent, failed, dry_run, payload, rate_limit, batch_size, send_concurrency, error_message, created_at, started_at, completed_at, heartbeat_at, updated_at"
+    )
+    .eq("id", jobId)
+    .eq("workspace_id", workspaceId)
+    .limit(1);
+  assertNoError(error, "Failed to read send job");
 
-  const recentErrors =
-    (errorRows ?? []).map((item) => {
-      const recipientError = String((item as { recipient: string; error: string | null }).error ?? "");
-      return recipientError
-        ? `${item.recipient}: ${recipientError}`
-        : `${item.recipient}: send failed`;
-    }) ?? [];
+  const row = (data ?? [])[0];
+  if (!row) return null;
 
-  return {
-    id: normalized.id,
-    workspaceId: normalized.workspaceId,
-    status: normalized.status,
-    total: normalized.total,
-    sent: normalized.sent,
-    failed: normalized.failed,
-    dryRun: normalized.dryRun,
-    rateLimit: normalized.rateLimit,
-    batchSize: normalized.batchSize,
-    sendConcurrency: normalized.sendConcurrency,
-    createdAt: normalized.createdAt,
-    startedAt: normalized.startedAt,
-    completedAt: normalized.completedAt,
-    heartbeatAt: normalized.heartbeatAt,
-    updatedAt: normalized.updatedAt,
-    subject: normalized.subject,
-    errorMessage: normalized.errorMessage,
-    remaining: Math.max(0, normalized.total - normalized.sent - normalized.failed),
-    recentErrors,
-  };
+  return buildSendJobProgressFromRow(db, row as SendJobRowRaw);
 }
 
 interface SendJobsQuery {
@@ -1876,25 +1893,33 @@ export async function getSendJobsForUser(
   const { data, error } = await query;
   assertNoError(error, "Failed to read send jobs");
 
-  return ((data ?? []) as SendJobRowRaw[]).map((row) => {
-    const normalized = normalizeSendJobRow(row);
-    return {
-      id: normalized.id,
-      workspaceId: normalized.workspaceId,
-      status: normalized.status,
-      total: normalized.total,
-      sent: normalized.sent,
-      failed: normalized.failed,
-      dryRun: normalized.dryRun,
-      createdAt: normalized.createdAt,
-      startedAt: normalized.startedAt,
-      completedAt: normalized.completedAt,
-      heartbeatAt: normalized.heartbeatAt,
-      updatedAt: normalized.updatedAt,
-      subject: normalized.subject,
-      errorMessage: normalized.errorMessage,
-    };
-  });
+  return mapSendJobSummaries((data ?? []) as SendJobRowRaw[]);
+}
+
+export async function getSendJobsForWorkspace(
+  workspaceId: string,
+  options: Omit<SendJobsQuery, "workspaceId"> = {}
+): Promise<SendJobSummary[]> {
+  const db = getDb();
+  const query = db
+    .from("send_jobs")
+    .select(
+      "id, workspace_id, user_id, status, total, sent, failed, dry_run, payload, rate_limit, batch_size, send_concurrency, error_message, created_at, started_at, completed_at, heartbeat_at, updated_at"
+    )
+    .eq("workspace_id", workspaceId)
+    .order("created_at", { ascending: false });
+
+  if (options.statuses && options.statuses.length > 0) {
+    query.in("status", options.statuses);
+  }
+
+  const limited = Math.max(1, Math.floor(options.limit ?? 50));
+  query.limit(limited);
+
+  const { data, error } = await query;
+  assertNoError(error, "Failed to read send jobs");
+
+  return mapSendJobSummaries((data ?? []) as SendJobRowRaw[]);
 }
 
 export async function getQueuedOrRunningSendJobs(
@@ -1955,6 +1980,76 @@ export async function getSendJobWorkerContext(
     batchSize: normalized.batchSize,
     sendConcurrency: normalized.sendConcurrency,
   };
+}
+
+async function buildSendJobProgressFromRow(
+  db: ReturnType<typeof getDb>,
+  row: SendJobRowRaw
+): Promise<SendJobProgress> {
+  const normalized = normalizeSendJobRow(row);
+
+  const { data: errorRows, error: errorRowsError } = await db
+    .from("send_job_recipients")
+    .select("recipient,error")
+    .eq("job_id", normalized.id)
+    .eq("status", "failed")
+    .order("id", { ascending: false })
+    .limit(5);
+  assertNoError(errorRowsError, "Failed to load send job errors");
+
+  const recentErrors =
+    (errorRows ?? []).map((item) => {
+      const recipientError = String(
+        (item as { recipient: string; error: string | null }).error ?? ""
+      );
+      return recipientError
+        ? `${item.recipient}: ${recipientError}`
+        : `${item.recipient}: send failed`;
+    }) ?? [];
+
+  return {
+    id: normalized.id,
+    workspaceId: normalized.workspaceId,
+    status: normalized.status,
+    total: normalized.total,
+    sent: normalized.sent,
+    failed: normalized.failed,
+    dryRun: normalized.dryRun,
+    rateLimit: normalized.rateLimit,
+    batchSize: normalized.batchSize,
+    sendConcurrency: normalized.sendConcurrency,
+    createdAt: normalized.createdAt,
+    startedAt: normalized.startedAt,
+    completedAt: normalized.completedAt,
+    heartbeatAt: normalized.heartbeatAt,
+    updatedAt: normalized.updatedAt,
+    subject: normalized.subject,
+    errorMessage: normalized.errorMessage,
+    remaining: Math.max(0, normalized.total - normalized.sent - normalized.failed),
+    recentErrors,
+  };
+}
+
+function mapSendJobSummaries(rows: SendJobRowRaw[]): SendJobSummary[] {
+  return rows.map((row) => {
+    const normalized = normalizeSendJobRow(row);
+    return {
+      id: normalized.id,
+      workspaceId: normalized.workspaceId,
+      status: normalized.status,
+      total: normalized.total,
+      sent: normalized.sent,
+      failed: normalized.failed,
+      dryRun: normalized.dryRun,
+      createdAt: normalized.createdAt,
+      startedAt: normalized.startedAt,
+      completedAt: normalized.completedAt,
+      heartbeatAt: normalized.heartbeatAt,
+      updatedAt: normalized.updatedAt,
+      subject: normalized.subject,
+      errorMessage: normalized.errorMessage,
+    };
+  });
 }
 
 export async function claimQueuedSendJob(jobId: string): Promise<boolean> {

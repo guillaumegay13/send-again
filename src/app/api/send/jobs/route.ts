@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { apiErrorResponse, requireAuthenticatedUser } from "@/lib/auth";
-import { getSendJobsForUser, SendJobStatus } from "@/lib/db";
+import {
+  apiErrorResponse,
+  requireAuthenticatedUser,
+  requireWorkspaceAuth,
+} from "@/lib/auth";
+import {
+  getSendJobsForUser,
+  getSendJobsForWorkspace,
+  SendJobStatus,
+} from "@/lib/db";
 
 function parseLimit(value: string | null): number {
   const parsed = Number(value);
@@ -36,17 +44,25 @@ function parseStatuses(value: string | null): SendJobStatus[] {
 
 export async function GET(req: NextRequest) {
   try {
-    const user = await requireAuthenticatedUser(req);
     const workspaceId =
       req.nextUrl.searchParams.get("workspace")?.trim().toLowerCase() || undefined;
     const limit = parseLimit(req.nextUrl.searchParams.get("limit"));
     const statuses = parseStatuses(req.nextUrl.searchParams.get("status"));
+    const authHeader = req.headers.get("authorization") ?? "";
+    const isApiKeyAuth =
+      authHeader.startsWith("Bearer ") &&
+      authHeader.slice("Bearer ".length).trim().startsWith("sk_");
 
-    const jobs = await getSendJobsForUser(user.id, {
-      workspaceId,
-      statuses,
-      limit,
-    });
+    const jobs = isApiKeyAuth
+      ? await getSendJobsForWorkspace((await requireWorkspaceAuth(req)).workspace, {
+          statuses,
+          limit,
+        })
+      : await getSendJobsForUser((await requireAuthenticatedUser(req)).id, {
+          workspaceId,
+          statuses,
+          limit,
+        });
 
     return NextResponse.json({ jobs });
   } catch (error) {

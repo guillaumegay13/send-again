@@ -101,10 +101,14 @@ Then create your user in Supabase Authentication (Email provider enabled):
 
 - `POST /api/send` → enqueue send job (or dry-run count).
 - `GET /api/send/status?jobId=<id>` → live job progress/status.
-- `GET /api/send/jobs?workspace=<id>&status=queued,running` → list jobs for current user.
+- `GET /api/send/jobs?workspace=<id>&status=queued,running` → list send jobs.
 - `POST /api/send/process` → worker endpoint to process queued/running jobs.
 - `GET /api/send/status` also runs an inline processing fallback for queued/running jobs by default.
 - `POST /api/send` schedules post-response processing via Next.js `after()`.
+- Auth:
+  - Supabase JWT works on all API endpoints.
+  - API key (`sk_...`) works on `/api/contacts`, `POST /api/send`, `GET /api/send/status`, and `GET /api/send/jobs`.
+  - `POST /api/send/process` uses `SEND_JOB_PROCESSOR_TOKEN` (if configured), not workspace API keys.
 
 Production recommendation:
 

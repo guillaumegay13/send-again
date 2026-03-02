@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSendJobForUser } from "@/lib/db";
+import { getSendJobForUser, getSendJobForWorkspace } from "@/lib/db";
 import { processSendJobs } from "@/lib/send-job-processor";
-import { apiErrorResponse, requireAuthenticatedUser } from "@/lib/auth";
+import {
+  apiErrorResponse,
+  requireAuthenticatedUser,
+  requireWorkspaceAuth,
+} from "@/lib/auth";
 
 function normalizePositiveInteger(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
@@ -18,13 +22,27 @@ function envFlagEnabled(value: string | undefined, fallback = true): boolean {
 
 export async function GET(req: NextRequest) {
   try {
-    const user = await requireAuthenticatedUser(req);
     const jobId = req.nextUrl.searchParams.get("jobId");
     if (!jobId) {
       return NextResponse.json({ error: "Missing jobId" }, { status: 400 });
     }
 
-    let progress = await getSendJobForUser(jobId, user.id);
+    const authHeader = req.headers.get("authorization") ?? "";
+    const isApiKeyAuth =
+      authHeader.startsWith("Bearer ") &&
+      authHeader.slice("Bearer ".length).trim().startsWith("sk_");
+    const apiKeyWorkspace = isApiKeyAuth
+      ? (await requireWorkspaceAuth(req)).workspace
+      : null;
+    const jwtUserId = isApiKeyAuth ? null : (await requireAuthenticatedUser(req)).id;
+
+    let progress = null;
+    if (apiKeyWorkspace) {
+      progress = await getSendJobForWorkspace(jobId, apiKeyWorkspace);
+    } else if (jwtUserId) {
+      progress = await getSendJobForUser(jobId, jwtUserId);
+    }
+
     if (!progress) {
       return NextResponse.json({ error: "Job not found" }, { status: 404 });
     }
@@ -50,9 +68,16 @@ export async function GET(req: NextRequest) {
         console.error("Inline send processing from status route failed:", error);
       }
 
-      const refreshed = await getSendJobForUser(jobId, user.id);
-      if (refreshed) {
-        progress = refreshed;
+      if (apiKeyWorkspace) {
+        const refreshed = await getSendJobForWorkspace(jobId, apiKeyWorkspace);
+        if (refreshed) {
+          progress = refreshed;
+        }
+      } else if (jwtUserId) {
+        const refreshed = await getSendJobForUser(jobId, jwtUserId);
+        if (refreshed) {
+          progress = refreshed;
+        }
       }
     }
 

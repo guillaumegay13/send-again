@@ -4,7 +4,7 @@ export const openapiSpec = {
     title: "Send Again API",
     version: "1.0.0",
     description:
-      "Email sending and contact management API. Authenticate with a Supabase JWT or an API key (contacts endpoints only).",
+      "Email sending and contact management API. Authenticate with a Supabase JWT or an API key.",
   },
   servers: [{ url: "/", description: "Current host" }],
   components: {
@@ -18,7 +18,7 @@ export const openapiSpec = {
         type: "http" as const,
         scheme: "bearer",
         description:
-          'API key (starts with "sk_"). Only works on /api/contacts endpoints. When used, the workspace query param is ignored — the workspace is resolved from the key.',
+          'API key (starts with "sk_"). Works on /api/contacts and /api/send* endpoints. When used, workspace filters are ignored — the workspace is resolved from the key.',
       },
     },
     schemas: {
@@ -471,7 +471,7 @@ export const openapiSpec = {
         operationId: "sendEmails",
         summary: "Send emails to recipients",
         tags: ["Send"],
-        security: [{ jwt: [] }],
+        security: [{ jwt: [] }, { apiKey: [] }],
         requestBody: {
           required: true,
           content: {
@@ -541,7 +541,7 @@ export const openapiSpec = {
         operationId: "getSendJobStatus",
         summary: "Get detailed status of a send job",
         tags: ["Send"],
-        security: [{ jwt: [] }],
+        security: [{ jwt: [] }, { apiKey: [] }],
         parameters: [
           { name: "jobId", in: "query" as const, required: true, schema: { type: "string", format: "uuid" } },
         ],
@@ -562,9 +562,15 @@ export const openapiSpec = {
         operationId: "listSendJobs",
         summary: "List send jobs",
         tags: ["Send"],
-        security: [{ jwt: [] }],
+        security: [{ jwt: [] }, { apiKey: [] }],
         parameters: [
-          { name: "workspace", in: "query" as const, schema: { type: "string" }, description: "Filter by workspace" },
+          {
+            name: "workspace",
+            in: "query" as const,
+            schema: { type: "string" },
+            description:
+              "Filter by workspace (ignored when using API key auth).",
+          },
           { name: "limit", in: "query" as const, schema: { type: "integer", default: 50, minimum: 1 } },
           {
             name: "status",
