@@ -108,6 +108,8 @@ Then create your user in Supabase Authentication (Email provider enabled):
 - Auth:
   - Supabase JWT works on all API endpoints.
   - API key (`sk_...`) works on `/api/contacts`, `POST /api/send`, `GET /api/send/status`, and `GET /api/send/jobs`.
+  - API key scopes: `contacts.read`, `contacts.write`, `send.read`, `send.write`.
+  - Existing keys keep full access by default (backward compatible).
   - `POST /api/send/process` uses `SEND_JOB_PROCESSOR_TOKEN` (if configured), not workspace API keys.
 
 Production recommendation:

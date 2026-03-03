@@ -18,7 +18,7 @@ export const openapiSpec = {
         type: "http" as const,
         scheme: "bearer",
         description:
-          'API key (starts with "sk_"). Works on /api/contacts and /api/send* endpoints. When used, workspace filters are ignored — the workspace is resolved from the key.',
+          'API key (starts with "sk_"). Works on /api/contacts and /api/send* endpoints. Each key can be scope-limited; keys without explicit scopes keep full access for backward compatibility. When used, workspace filters are ignored — the workspace is resolved from the key.',
       },
     },
     schemas: {
@@ -41,6 +41,13 @@ export const openapiSpec = {
           workspaceId: { type: "string" },
           name: { type: "string" },
           keyPrefix: { type: "string", description: "First 10 chars of the key" },
+          scopes: {
+            type: "array",
+            items: {
+              type: "string",
+              enum: ["contacts.read", "contacts.write", "send.read", "send.write"],
+            },
+          },
           createdAt: { type: "string", format: "date-time" },
         },
       },
@@ -51,6 +58,13 @@ export const openapiSpec = {
           id: { type: "string", format: "uuid" },
           name: { type: "string" },
           keyPrefix: { type: "string" },
+          scopes: {
+            type: "array",
+            items: {
+              type: "string",
+              enum: ["contacts.read", "contacts.write", "send.read", "send.write"],
+            },
+          },
           createdAt: { type: "string", format: "date-time" },
         },
       },
@@ -343,6 +357,20 @@ export const openapiSpec = {
                 properties: {
                   workspace: { type: "string" },
                   name: { type: "string", default: "" },
+                  scopes: {
+                    type: "array",
+                    description:
+                      "Optional explicit scopes. If omitted, full access is granted for backward compatibility.",
+                    items: {
+                      type: "string",
+                      enum: [
+                        "contacts.read",
+                        "contacts.write",
+                        "send.read",
+                        "send.write",
+                      ],
+                    },
+                  },
                 },
               },
             },

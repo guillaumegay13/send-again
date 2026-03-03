@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
       authHeader.startsWith("Bearer ") &&
       authHeader.slice("Bearer ".length).trim().startsWith("sk_");
     const apiKeyWorkspace = isApiKeyAuth
-      ? (await requireWorkspaceAuth(req)).workspace
+      ? (await requireWorkspaceAuth(req, undefined, "send.read")).workspace
       : null;
     const jwtUserId = isApiKeyAuth ? null : (await requireAuthenticatedUser(req)).id;
 

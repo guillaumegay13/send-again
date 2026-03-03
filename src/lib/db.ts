@@ -1,4 +1,9 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import {
+  type ApiKeyScope,
+  isFullApiKeyScopeSet,
+  resolveStoredApiKeyScopes,
+} from "@/lib/api-key-scopes";
 
 const globalDb = globalThis as unknown as { __supabaseDb?: SupabaseClient };
 
@@ -80,6 +85,20 @@ function isMissingTableError(
   );
 }
 
+function isMissingColumnError(
+  error: { message: string } | null,
+  table: string,
+  column: string
+): boolean {
+  if (!error) return false;
+  const message = error.message.toLowerCase();
+  if (!message.includes(table.toLowerCase())) return false;
+  if (!message.includes(column.toLowerCase())) return false;
+  return (
+    message.includes("schema cache") || message.includes("does not exist")
+  );
+}
+
 function normalizeFields(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
@@ -126,6 +145,7 @@ export interface DbApiKey {
   workspaceId: string;
   name: string;
   keyPrefix: string;
+  scopes: ApiKeyScope[];
   createdAt: string;
 }
 
@@ -134,8 +154,14 @@ interface ApiKeyRow {
   workspace_id: string;
   name: string;
   key_prefix: string;
-  key_hash: string;
+  key_hash?: string;
+  scopes?: unknown;
   created_at: string;
+}
+
+export interface ApiKeyAuthLookup {
+  workspaceId: string;
+  scopes: ApiKeyScope[];
 }
 
 async function hashApiKey(raw: string): Promise<string> {
@@ -157,26 +183,53 @@ function generateRawApiKey(): string {
 
 export async function createApiKey(
   workspaceId: string,
-  name: string
+  name: string,
+  scopes: ApiKeyScope[]
 ): Promise<{ key: string; apiKey: DbApiKey }> {
   const raw = generateRawApiKey();
   const keyHash = await hashApiKey(raw);
   const keyPrefix = raw.slice(0, 10);
+  const storedScopes = isFullApiKeyScopeSet(scopes) ? null : scopes;
 
   const db = getDb();
-  const { data, error } = await db
+  const insertWithScopes = await db
     .from("api_keys")
     .insert({
       workspace_id: workspaceId,
       key_hash: keyHash,
       key_prefix: keyPrefix,
       name: name || "",
+      scopes: storedScopes,
     })
-    .select("id, workspace_id, name, key_prefix, created_at")
+    .select("id, workspace_id, name, key_prefix, scopes, created_at")
     .single();
-  assertNoError(error, "Failed to create API key");
+  const scopesColumnMissing = isMissingColumnError(
+    insertWithScopes.error,
+    "api_keys",
+    "scopes"
+  );
+  if (!scopesColumnMissing) {
+    assertNoError(insertWithScopes.error, "Failed to create API key");
+  }
 
-  const row = data as ApiKeyRow;
+  let row: ApiKeyRow;
+  if (scopesColumnMissing) {
+    const legacyInsert = await db
+      .from("api_keys")
+      .insert({
+        workspace_id: workspaceId,
+        key_hash: keyHash,
+        key_prefix: keyPrefix,
+        name: name || "",
+      })
+      .select("id, workspace_id, name, key_prefix, created_at")
+      .single();
+    assertNoError(legacyInsert.error, "Failed to create API key");
+    row = legacyInsert.data as ApiKeyRow;
+  } else {
+    row = insertWithScopes.data as ApiKeyRow;
+  }
+
   return {
     key: raw,
     apiKey: {
@@ -184,6 +237,7 @@ export async function createApiKey(
       workspaceId: row.workspace_id,
       name: row.name,
       keyPrefix: row.key_prefix,
+      scopes: resolveStoredApiKeyScopes(row.scopes),
       createdAt: row.created_at,
     },
   };
@@ -193,18 +247,38 @@ export async function getApiKeysForWorkspace(
   workspaceId: string
 ): Promise<DbApiKey[]> {
   const db = getDb();
-  const { data, error } = await db
+  const resultWithScopes = await db
     .from("api_keys")
-    .select("id, workspace_id, name, key_prefix, created_at")
+    .select("id, workspace_id, name, key_prefix, scopes, created_at")
     .eq("workspace_id", workspaceId)
     .order("created_at", { ascending: false });
-  assertNoError(error, "Failed to fetch API keys");
+  const scopesColumnMissing = isMissingColumnError(
+    resultWithScopes.error,
+    "api_keys",
+    "scopes"
+  );
+  if (!scopesColumnMissing) {
+    assertNoError(resultWithScopes.error, "Failed to fetch API keys");
+  }
 
-  return ((data ?? []) as ApiKeyRow[]).map((row) => ({
+  const rows = scopesColumnMissing
+    ? await (async () => {
+        const legacyResult = await db
+          .from("api_keys")
+          .select("id, workspace_id, name, key_prefix, created_at")
+          .eq("workspace_id", workspaceId)
+          .order("created_at", { ascending: false });
+        assertNoError(legacyResult.error, "Failed to fetch API keys");
+        return (legacyResult.data ?? []) as ApiKeyRow[];
+      })()
+    : ((resultWithScopes.data ?? []) as ApiKeyRow[]);
+
+  return rows.map((row) => ({
     id: row.id,
     workspaceId: row.workspace_id,
     name: row.name,
     keyPrefix: row.key_prefix,
+    scopes: resolveStoredApiKeyScopes(row.scopes),
     createdAt: row.created_at,
   }));
 }
@@ -224,18 +298,48 @@ export async function deleteApiKey(
   return (data ?? []).length > 0;
 }
 
+export async function getApiKeyAuthByHash(
+  keyHash: string
+): Promise<ApiKeyAuthLookup | null> {
+  const db = getDb();
+  const resultWithScopes = await db
+    .from("api_keys")
+    .select("workspace_id, scopes")
+    .eq("key_hash", keyHash)
+    .limit(1);
+  const scopesColumnMissing = isMissingColumnError(
+    resultWithScopes.error,
+    "api_keys",
+    "scopes"
+  );
+  if (!scopesColumnMissing) {
+    assertNoError(resultWithScopes.error, "Failed to look up API key");
+  }
+
+  const row = scopesColumnMissing
+    ? await (async () => {
+        const legacyResult = await db
+          .from("api_keys")
+          .select("workspace_id")
+          .eq("key_hash", keyHash)
+          .limit(1);
+        assertNoError(legacyResult.error, "Failed to look up API key");
+        return (legacyResult.data ?? [])[0] as ApiKeyRow | undefined;
+      })()
+    : ((resultWithScopes.data ?? [])[0] as ApiKeyRow | undefined);
+
+  if (!row?.workspace_id) return null;
+  return {
+    workspaceId: row.workspace_id,
+    scopes: resolveStoredApiKeyScopes(row.scopes),
+  };
+}
+
 export async function getWorkspaceIdByKeyHash(
   keyHash: string
 ): Promise<string | null> {
-  const db = getDb();
-  const { data, error } = await db
-    .from("api_keys")
-    .select("workspace_id")
-    .eq("key_hash", keyHash)
-    .limit(1);
-  assertNoError(error, "Failed to look up API key");
-  const row = (data ?? [])[0] as { workspace_id: string } | undefined;
-  return row?.workspace_id ?? null;
+  const auth = await getApiKeyAuthByHash(keyHash);
+  return auth?.workspaceId ?? null;
 }
 
 export { hashApiKey };

@@ -10,7 +10,11 @@ import { apiErrorResponse, requireWorkspaceAuth } from "@/lib/auth";
 export async function GET(req: NextRequest) {
   try {
     const workspaceParam = req.nextUrl.searchParams.get("workspace");
-    const { workspace } = await requireWorkspaceAuth(req, workspaceParam);
+    const { workspace } = await requireWorkspaceAuth(
+      req,
+      workspaceParam,
+      "contacts.read"
+    );
 
     return NextResponse.json(await getContacts(workspace));
   } catch (error) {
@@ -33,7 +37,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { workspace } = await requireWorkspaceAuth(req, workspaceParam);
+    const { workspace } = await requireWorkspaceAuth(
+      req,
+      workspaceParam,
+      "contacts.write"
+    );
     const contactList = contacts as Array<{
       email: string;
       fields: Record<string, string>;
@@ -59,7 +67,11 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   try {
     const workspaceParam = req.nextUrl.searchParams.get("workspace");
-    const { workspace } = await requireWorkspaceAuth(req, workspaceParam);
+    const { workspace } = await requireWorkspaceAuth(
+      req,
+      workspaceParam,
+      "contacts.write"
+    );
 
     await deleteAllContacts(workspace);
     return NextResponse.json({ ok: true });

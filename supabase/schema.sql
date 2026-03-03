@@ -119,8 +119,25 @@ create table if not exists api_keys (
   key_hash text not null unique,
   key_prefix text not null,
   name text not null default '',
+  scopes text[] null,
   created_at timestamptz not null default now()
 );
 
+alter table if exists api_keys
+  add column if not exists scopes text[] null;
+
 create index if not exists idx_api_keys_workspace on api_keys(workspace_id);
 create index if not exists idx_api_keys_key_hash on api_keys(key_hash);
+
+-- Enable Row Level Security on all public tables.
+-- The app accesses data exclusively via the service role key (which bypasses RLS),
+-- so no policies are needed. This prevents any access through the anon/publishable key.
+alter table if exists workspace_settings enable row level security;
+alter table if exists contacts enable row level security;
+alter table if exists contact_unsubscribes enable row level security;
+alter table if exists sends enable row level security;
+alter table if exists email_events enable row level security;
+alter table if exists workspace_memberships enable row level security;
+alter table if exists send_jobs enable row level security;
+alter table if exists send_job_recipients enable row level security;
+alter table if exists api_keys enable row level security;

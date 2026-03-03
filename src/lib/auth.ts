@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
-import { hashApiKey, getWorkspaceIdByKeyHash, userCanAccessWorkspace } from "@/lib/db";
+import { type ApiKeyScope } from "@/lib/api-key-scopes";
+import { hashApiKey, getApiKeyAuthByHash, userCanAccessWorkspace } from "@/lib/db";
 
 export class ApiAuthError extends Error {
   status: number;
@@ -113,11 +114,13 @@ export interface WorkspaceAuthResult {
   workspace: string;
   authMethod: "api_key" | "jwt";
   userId?: string;
+  apiKeyScopes?: ApiKeyScope[];
 }
 
 export async function requireWorkspaceAuth(
   req: NextRequest,
-  workspaceFromParam?: string | null
+  workspaceFromParam?: string | null,
+  requiredScope?: ApiKeyScope
 ): Promise<WorkspaceAuthResult> {
   const authHeader = req.headers.get("authorization") ?? "";
   if (!authHeader.startsWith("Bearer ")) {
@@ -132,11 +135,21 @@ export async function requireWorkspaceAuth(
   // API key path
   if (token.startsWith("sk_")) {
     const keyHash = await hashApiKey(token);
-    const workspace = await getWorkspaceIdByKeyHash(keyHash);
-    if (!workspace) {
+    const apiKey = await getApiKeyAuthByHash(keyHash);
+    if (!apiKey) {
       throw new ApiAuthError("Invalid API key", 401);
     }
-    return { workspace, authMethod: "api_key" };
+    if (requiredScope && !apiKey.scopes.includes(requiredScope)) {
+      throw new ApiAuthError(
+        `API key missing required scope: ${requiredScope}`,
+        403
+      );
+    }
+    return {
+      workspace: apiKey.workspaceId,
+      authMethod: "api_key",
+      apiKeyScopes: apiKey.scopes,
+    };
   }
 
   // JWT path

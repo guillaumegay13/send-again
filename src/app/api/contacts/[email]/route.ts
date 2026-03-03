@@ -9,7 +9,11 @@ export async function GET(
   try {
     const { email } = await params;
     const workspaceParam = req.nextUrl.searchParams.get("workspace");
-    const { workspace } = await requireWorkspaceAuth(req, workspaceParam);
+    const { workspace } = await requireWorkspaceAuth(
+      req,
+      workspaceParam,
+      "contacts.read"
+    );
 
     const decoded = decodeURIComponent(email);
     const contacts = await getContactsByEmails(workspace, [decoded]);
@@ -30,7 +34,11 @@ export async function PUT(
     const { email } = await params;
     const body = await req.json();
     const { workspace: workspaceParam, fields } = body;
-    const { workspace } = await requireWorkspaceAuth(req, workspaceParam);
+    const { workspace } = await requireWorkspaceAuth(
+      req,
+      workspaceParam,
+      "contacts.write"
+    );
 
     const decoded = decodeURIComponent(email);
     await updateContact(workspace, decoded, fields ?? {});
@@ -47,7 +55,11 @@ export async function DELETE(
   try {
     const { email } = await params;
     const workspaceParam = req.nextUrl.searchParams.get("workspace");
-    const { workspace } = await requireWorkspaceAuth(req, workspaceParam);
+    const { workspace } = await requireWorkspaceAuth(
+      req,
+      workspaceParam,
+      "contacts.write"
+    );
 
     const decoded = decodeURIComponent(email);
     await deleteContact(workspace, decoded);

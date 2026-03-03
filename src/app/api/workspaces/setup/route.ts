@@ -185,14 +185,17 @@ export async function GET(req: NextRequest) {
       websiteUrl ? checkUnsubscribePage(websiteUrl) : checkUnsubscribePage(`https://${domain}`),
     ]);
 
+    const spfStatus = spfFound ? "Found" : status.verificationStatus === "Pending" ? "Pending" : "Not found";
+    const dmarcStatus = dmarcFound ? "Found" : status.verificationStatus === "Pending" ? "Pending" : "Not found";
+
     return NextResponse.json({
       verificationToken: status.verificationToken,
       verificationStatus: status.verificationStatus,
       dkimTokens: status.dkimTokens,
       dkimStatus: status.dkimStatus,
       configSetExists: configSetExists_,
-      spfFound,
-      dmarcFound,
+      spfStatus,
+      dmarcStatus,
       unsubscribePageFound,
     });
   } catch (err) {

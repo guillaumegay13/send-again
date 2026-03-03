@@ -134,6 +134,12 @@ const HISTORY_TABLE_PAGE_SIZE = 25;
 const CONTACTS_TABLE_PAGE_SIZE = 200;
 const CONTACT_IMPORT_BATCH_SIZE = 1000;
 const NAMECHEAP_DNS_STORAGE_KEY = "send-again.namecheap-dns";
+const API_KEY_SCOPE_OPTIONS: Array<{ value: ApiKeyScope; label: string }> = [
+  { value: "contacts.read", label: "Contacts read" },
+  { value: "contacts.write", label: "Contacts write" },
+  { value: "send.read", label: "Mail read" },
+  { value: "send.write", label: "Mail write" },
+];
 
 interface SendJobStatusResponse {
   id: string;
@@ -168,11 +174,18 @@ interface SendJobSummary {
   failed: number;
 }
 
+type ApiKeyScope =
+  | "contacts.read"
+  | "contacts.write"
+  | "send.read"
+  | "send.write";
+
 interface ApiKeyMeta {
   id: string;
   workspaceId: string;
   name: string;
   keyPrefix: string;
+  scopes: ApiKeyScope[];
   createdAt: string;
 }
 
@@ -182,8 +195,8 @@ interface SetupStatus {
   dkimTokens: string[];
   dkimStatus: "NotStarted" | "Pending" | "Success" | "Failed";
   configSetExists: boolean;
-  spfFound: boolean;
-  dmarcFound: boolean;
+  spfStatus: "Found" | "Pending" | "Not found";
+  dmarcStatus: "Found" | "Pending" | "Not found";
   unsubscribePageFound: boolean;
 }
 
@@ -1220,6 +1233,9 @@ export default function ComposePage() {
   const [apiKeys, setApiKeys] = useState<ApiKeyMeta[]>([]);
   const [apiKeysLoading, setApiKeysLoading] = useState(false);
   const [newKeyName, setNewKeyName] = useState("");
+  const [newKeyScopes, setNewKeyScopes] = useState<ApiKeyScope[]>(
+    API_KEY_SCOPE_OPTIONS.map((option) => option.value)
+  );
   const [creatingKey, setCreatingKey] = useState(false);
   const [newlyCreatedKey, setNewlyCreatedKey] = useState<string | null>(null);
 
@@ -2262,17 +2278,34 @@ export default function ComposePage() {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ workspace: activeId, name: newKeyName.trim() }),
+          body: JSON.stringify({
+            workspace: activeId,
+            name: newKeyName.trim(),
+            scopes: newKeyScopes,
+          }),
         }
       );
       setNewlyCreatedKey(res.key);
       setNewKeyName("");
+      setNewKeyScopes(API_KEY_SCOPE_OPTIONS.map((option) => option.value));
       await refreshApiKeys();
     } catch (e) {
       console.error(e);
     } finally {
       setCreatingKey(false);
     }
+  }
+
+  function toggleNewKeyScope(scope: ApiKeyScope, enabled: boolean) {
+    setNewKeyScopes((current) => {
+      if (enabled) {
+        if (current.includes(scope)) return current;
+        return API_KEY_SCOPE_OPTIONS.map((option) => option.value).filter(
+          (value) => value === scope || current.includes(value)
+        );
+      }
+      return current.filter((value) => value !== scope);
+    });
   }
 
   async function deleteApiKeyHandler(id: string) {
@@ -4665,17 +4698,19 @@ export default function ComposePage() {
                 {/* 2. SPF */}
                 <div className="rounded border border-gray-200 bg-white p-3">
                   <div className="flex items-center gap-2">
-                    {setupStatus?.spfFound ? (
+                    {setupStatus?.spfStatus === "Found" ? (
                       <span className="h-4 w-4 shrink-0 rounded-full bg-green-500 flex items-center justify-center text-white text-[10px]">✓</span>
+                    ) : setupStatus?.spfStatus === "Pending" ? (
+                      <span className="h-4 w-4 shrink-0 rounded-full bg-yellow-400" />
                     ) : (
                       <span className="h-4 w-4 shrink-0 rounded border border-gray-300 bg-white" />
                     )}
                     <p className="text-sm text-gray-700 font-medium">Add SPF record</p>
                     {setupStatus && (
                       <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-                        setupStatus.spfFound ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
+                        setupStatus.spfStatus === "Found" ? "bg-green-100 text-green-700" : setupStatus.spfStatus === "Pending" ? "bg-yellow-100 text-yellow-700" : "bg-gray-100 text-gray-500"
                       }`}>
-                        {setupStatus.spfFound ? "Found" : "Not found"}
+                        {setupStatus.spfStatus}
                       </span>
                     )}
                   </div>
@@ -4756,17 +4791,19 @@ export default function ComposePage() {
                 {/* 4. DMARC */}
                 <div className="rounded border border-gray-200 bg-white p-3">
                   <div className="flex items-center gap-2">
-                    {setupStatus?.dmarcFound ? (
+                    {setupStatus?.dmarcStatus === "Found" ? (
                       <span className="h-4 w-4 shrink-0 rounded-full bg-green-500 flex items-center justify-center text-white text-[10px]">✓</span>
+                    ) : setupStatus?.dmarcStatus === "Pending" ? (
+                      <span className="h-4 w-4 shrink-0 rounded-full bg-yellow-400" />
                     ) : (
                       <span className="h-4 w-4 shrink-0 rounded border border-gray-300 bg-white" />
                     )}
                     <p className="text-sm text-gray-700 font-medium">Add DMARC record</p>
                     {setupStatus && (
                       <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-                        setupStatus.dmarcFound ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
+                        setupStatus.dmarcStatus === "Found" ? "bg-green-100 text-green-700" : setupStatus.dmarcStatus === "Pending" ? "bg-yellow-100 text-yellow-700" : "bg-gray-100 text-gray-500"
                       }`}>
-                        {setupStatus.dmarcFound ? "Found" : "Not found"}
+                        {setupStatus.dmarcStatus}
                       </span>
                     )}
                   </div>
@@ -5054,11 +5091,37 @@ export default function ComposePage() {
                   <button
                     type="button"
                     onClick={createApiKeyHandler}
-                    disabled={creatingKey}
+                    disabled={creatingKey || newKeyScopes.length === 0}
                     className="rounded bg-black text-white px-3 py-2 text-sm font-medium hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {creatingKey ? "Creating..." : "Create"}
                   </button>
+                </div>
+                <div className="mt-3 rounded border border-gray-200 bg-gray-50 p-3">
+                  <p className="text-xs text-gray-500 mb-2">Key scopes</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {API_KEY_SCOPE_OPTIONS.map((scopeOption) => (
+                      <label
+                        key={scopeOption.value}
+                        className="flex items-center gap-2 text-xs text-gray-700"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={newKeyScopes.includes(scopeOption.value)}
+                          onChange={(event) =>
+                            toggleNewKeyScope(scopeOption.value, event.target.checked)
+                          }
+                          className="h-3.5 w-3.5 rounded border-gray-300 text-black focus:ring-black"
+                        />
+                        {scopeOption.label}
+                      </label>
+                    ))}
+                  </div>
+                  {newKeyScopes.length === 0 ? (
+                    <p className="mt-2 text-xs text-red-600">
+                      Select at least one scope.
+                    </p>
+                  ) : null}
                 </div>
 
                 {apiKeysLoading ? (
@@ -5082,6 +5145,16 @@ export default function ComposePage() {
                           <span className="text-xs text-gray-400 ml-2">
                             {new Date(k.createdAt).toLocaleDateString()}
                           </span>
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {k.scopes.map((scope) => (
+                              <span
+                                key={`${k.id}-${scope}`}
+                                className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-600"
+                              >
+                                {scope}
+                              </span>
+                            ))}
+                          </div>
                         </div>
                         <button
                           type="button"

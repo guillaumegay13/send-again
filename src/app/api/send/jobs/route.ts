@@ -54,10 +54,13 @@ export async function GET(req: NextRequest) {
       authHeader.slice("Bearer ".length).trim().startsWith("sk_");
 
     const jobs = isApiKeyAuth
-      ? await getSendJobsForWorkspace((await requireWorkspaceAuth(req)).workspace, {
+      ? await getSendJobsForWorkspace(
+          (await requireWorkspaceAuth(req, undefined, "send.read")).workspace,
+          {
           statuses,
           limit,
-        })
+          }
+        )
       : await getSendJobsForUser((await requireAuthenticatedUser(req)).id, {
           workspaceId,
           statuses,

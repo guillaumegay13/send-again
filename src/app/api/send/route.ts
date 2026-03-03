@@ -116,7 +116,11 @@ function normalizeSendRequestBody(raw: unknown): SendBody {
 export async function POST(req: NextRequest) {
   try {
     const body = normalizeSendRequestBody(await req.json());
-    const auth = await requireWorkspaceAuth(req, body.workspaceId || null);
+    const auth = await requireWorkspaceAuth(
+      req,
+      body.workspaceId || null,
+      "send.write"
+    );
     const workspaceId = auth.workspace;
 
     if (
