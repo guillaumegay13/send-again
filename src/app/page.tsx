@@ -3491,12 +3491,14 @@ export default function ComposePage() {
             )}
           </div>
         }
-        items={(["compose", "contacts", "history", "campaigns", "settings"] as Tab[]).map((t) => ({
-          id: t,
-          label: t,
-          active: tab === t,
-          onClick: () => setTab(t),
-        }))}
+        items={[
+          ...(["compose", "contacts", "history", "campaigns", "settings"] as Tab[]).map((t) => ({
+            id: t,
+            label: t,
+            active: tab === t,
+            onClick: () => setTab(t),
+          })),
+        ]}
         footer={
           contacts.length > 0 ? (
             <span className="text-xs text-gray-400">
@@ -5416,6 +5418,10 @@ export default function ComposePage() {
               <h2 className="text-base font-semibold text-gray-900 mb-4">API Keys</h2>
               <p className="text-xs text-gray-500 mb-3">
                 Create keys to access the API programmatically.
+                {" "}
+                <a href="/docs" className="underline hover:text-gray-900">
+                  API docs
+                </a>
               </p>
 
               <div className="max-w-xl">

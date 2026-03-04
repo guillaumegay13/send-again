@@ -278,7 +278,7 @@ async function processSendJob(
       const wave = waves[waveIndex];
       const waveResult = await Promise.all(
         wave.map(async (recipient) => {
-          if (isBillingEnforced()) {
+          if (isBillingEnforced() && !context.payload.billingBypass) {
             const credit = await consumeWorkspaceCredits(context.workspaceId, 1);
             if (!credit.ok) {
               await markSendJobRecipientFailed(

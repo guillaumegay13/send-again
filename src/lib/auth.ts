@@ -114,6 +114,7 @@ export interface WorkspaceAuthResult {
   workspace: string;
   authMethod: "api_key" | "jwt";
   userId?: string;
+  userEmail?: string;
   apiKeyScopes?: ApiKeyScope[];
 }
 
@@ -179,7 +180,7 @@ export async function requireWorkspaceAuth(
     throw new ApiAuthError("Workspace not found", 403);
   }
 
-  return { workspace, authMethod: "jwt", userId: data.user.id };
+  return { workspace, authMethod: "jwt", userId: data.user.id, userEmail: email };
 }
 
 export function apiErrorResponse(

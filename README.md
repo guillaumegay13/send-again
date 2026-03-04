@@ -46,6 +46,8 @@ CLOUDFLARE_ZONE_ID=optional-cloudflare-zone-id
 ROUTE53_HOSTED_ZONE_ID=optional-route53-hosted-zone-id
 BILLING_ENFORCED=false
 FREE_TIER_INITIAL_CREDITS=1000
+BILLING_UNLIMITED_AUTH_EMAILS=owner@example.com
+BILLING_UNLIMITED_USER_IDS=
 POLAR_ACCESS_TOKEN=your-polar-organization-access-token
 POLAR_SERVER=sandbox
 POLAR_CREDIT_PACKS_JSON=[{"id":"topup_10","name":"$10 Top-up","productId":"your-polar-product-id","credits":10000,"amountCents":1000,"currency":"usd"}]
@@ -92,6 +94,8 @@ POLAR_CREDIT_METADATA_KEY=email_credits
 | `SEND_JOB_STATUS_INLINE_MAX_RECIPIENTS` | No | `50` | Max recipients processed per status poll when inline fallback is enabled |
 | `BILLING_ENFORCED` | No | `false` | Enforce credit checks in the send worker (`true`/`false`) |
 | `FREE_TIER_INITIAL_CREDITS` | No | `1000` | One-time free credits granted to a workspace when billing profile is created |
+| `BILLING_UNLIMITED_AUTH_EMAILS` | No | — | Comma-separated auth emails that bypass credit enforcement (admin override) |
+| `BILLING_UNLIMITED_USER_IDS` | No | — | Comma-separated Supabase user IDs that bypass credit enforcement |
 | `POLAR_ACCESS_TOKEN` | No | — | Polar organization access token (required for checkout, portal, and webhook sync) |
 | `POLAR_SERVER` | No | `sandbox` | Polar environment (`sandbox` or `production`) |
 | `POLAR_CREDIT_PACKS_JSON` | No | — | JSON array of top-up packs (`id`, `name`, `productId`, `credits`, `amountCents`, `currency`) exposed to checkout |
@@ -121,6 +125,8 @@ Then create your user in Supabase Authentication (Email provider enabled):
 
 ### Async Send API
 
+- Developer docs UI: `/docs`
+- Raw OpenAPI spec: `/api/openapi.json`
 - `POST /api/send` → enqueue send job (or dry-run count).
 - `GET /api/send/status?jobId=<id>` → live job progress/status.
 - `GET /api/send/jobs?workspace=<id>&status=queued,running` → list send jobs.

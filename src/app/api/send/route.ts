@@ -12,6 +12,7 @@ import { processSendJobs } from "@/lib/send-job-processor";
 import { apiErrorResponse, requireWorkspaceAuth } from "@/lib/auth";
 import {
   getInitialFreeCredits,
+  isBillingUnlimitedForUser,
   isBillingEnabled,
   isBillingEnforced,
 } from "@/lib/billing";
@@ -44,6 +45,7 @@ interface SendBillingSummary {
   initialFreeCredits: number;
   billingStatus: string;
   hasEnoughCredits: boolean;
+  billingBypass: boolean;
 }
 
 function normalizeRecipientMode(value: unknown): RecipientMode {
@@ -137,6 +139,14 @@ export async function POST(req: NextRequest) {
       "send.write"
     );
     const workspaceId = auth.workspace;
+    let preferredWorkspaceUserId: string | null = null;
+    if (!auth.userId) {
+      preferredWorkspaceUserId = await getPreferredWorkspaceUserId(workspaceId);
+    }
+    const billingBypass = isBillingUnlimitedForUser({
+      userId: auth.userId ?? preferredWorkspaceUserId,
+      email: auth.userEmail ?? null,
+    });
 
     if (
       auth.authMethod === "api_key" &&
@@ -229,7 +239,8 @@ export async function POST(req: NextRequest) {
     if (isBillingEnabled()) {
       const billing = await getOrCreateWorkspaceBilling(workspaceId);
       const creditsRequired = recipients.length;
-      const hasEnoughCredits = billing.creditBalance >= creditsRequired;
+      const hasEnoughCredits =
+        billingBypass || billing.creditBalance >= creditsRequired;
 
       billingSummary = {
         creditBalance: billing.creditBalance,
@@ -237,6 +248,7 @@ export async function POST(req: NextRequest) {
         initialFreeCredits: getInitialFreeCredits(),
         billingStatus: billing.billingStatus,
         hasEnoughCredits,
+        billingBypass,
       };
 
       if (!body.dryRun && isBillingEnforced() && !hasEnoughCredits) {
@@ -267,6 +279,7 @@ export async function POST(req: NextRequest) {
       footerHtml: body.footerHtml,
       websiteUrl: body.websiteUrl,
       baseUrl,
+      billingBypass,
     };
 
     if (body.dryRun) {
@@ -282,7 +295,7 @@ export async function POST(req: NextRequest) {
     if (auth.userId) {
       jobUserId = auth.userId;
     } else {
-      const preferredUserId = await getPreferredWorkspaceUserId(workspaceId);
+      const preferredUserId = preferredWorkspaceUserId;
       if (!preferredUserId) {
         return NextResponse.json(
           {

@@ -37,6 +37,14 @@ function normalizePackId(value: unknown): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
 }
 
+function parseCsvList(value: string | undefined, lowercase = true): string[] {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map((part) => (lowercase ? part.trim().toLowerCase() : part.trim()))
+    .filter(Boolean);
+}
+
 function normalizeCurrency(value: unknown): string {
   if (typeof value !== "string") return "usd";
   const normalized = value.trim().toLowerCase();
@@ -78,6 +86,26 @@ export function getInitialFreeCredits(): number {
 export function getPolarCreditMetadataKey(): string {
   const key = process.env.POLAR_CREDIT_METADATA_KEY?.trim();
   return key || "email_credits";
+}
+
+export function isBillingUnlimitedForUser(params: {
+  userId?: string | null;
+  email?: string | null;
+}): boolean {
+  const userIds = parseCsvList(process.env.BILLING_UNLIMITED_USER_IDS, false);
+  const emails = parseCsvList(process.env.BILLING_UNLIMITED_AUTH_EMAILS, true);
+
+  const userId = params.userId?.trim() ?? "";
+  if (userId && userIds.includes(userId)) {
+    return true;
+  }
+
+  const email = (params.email ?? "").trim().toLowerCase();
+  if (email && emails.includes(email)) {
+    return true;
+  }
+
+  return false;
 }
 
 export function normalizeBillingStatus(value: unknown): WorkspaceBillingStatus {

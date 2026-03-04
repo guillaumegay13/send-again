@@ -1948,6 +1948,7 @@ export interface SendJobPayload {
   footerHtml: string;
   websiteUrl: string;
   baseUrl: string;
+  billingBypass: boolean;
 }
 
 export interface SendJobProgress {
@@ -2050,6 +2051,7 @@ function normalizeSendJobPayload(value: unknown): SendJobPayload {
   const footerHtml = String(payload.footerHtml ?? "").trim();
   const websiteUrl = String(payload.websiteUrl ?? "").trim();
   const baseUrl = String(payload.baseUrl ?? "").trim();
+  const billingBypass = payload.billingBypass === true;
   const rateLimit = normalizeNonNegativeInteger(payload.rateLimit, 300);
 
   if (!workspaceId || !from || !subject || !html || !baseUrl) {
@@ -2067,6 +2069,7 @@ function normalizeSendJobPayload(value: unknown): SendJobPayload {
     footerHtml,
     websiteUrl,
     baseUrl,
+    billingBypass,
   };
 }
 
@@ -2110,6 +2113,7 @@ function normalizeSendJobRow(row: SendJobRowRaw): SendJobPayload & {
     footerHtml: payload.footerHtml,
     websiteUrl: payload.websiteUrl,
     baseUrl: payload.baseUrl,
+    billingBypass: payload.billingBypass,
     userId: row.user_id,
     status: normalizeSendJobStatus(row.status),
     total: normalizeNonNegativeInteger(row.total, 0),
@@ -2150,6 +2154,7 @@ export async function createSendJob(params: {
     footerHtml: params.payload.footerHtml,
     websiteUrl: params.payload.websiteUrl,
     baseUrl: params.payload.baseUrl,
+    billingBypass: params.payload.billingBypass,
   };
 
   const { error } = await db.from("send_jobs").insert({
@@ -2388,6 +2393,7 @@ export async function getSendJobWorkerContext(
       footerHtml: normalized.footerHtml,
       websiteUrl: normalized.websiteUrl,
       baseUrl: normalized.baseUrl,
+      billingBypass: normalized.billingBypass,
     },
     rateLimit: normalized.rateLimit,
     batchSize: normalized.batchSize,
