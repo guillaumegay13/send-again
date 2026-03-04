@@ -247,6 +247,7 @@ interface BillingStatusResponse {
   creditsPurchased: number;
   billingEnforced: boolean;
   requiresTopUp: boolean;
+  billingBypass: boolean;
   billing: {
     billingStatus: string;
     billingEmail: string | null;
@@ -3413,6 +3414,10 @@ export default function ComposePage() {
   const billingStatusLabel = (
     billingStatus?.billing.billingStatus || "inactive"
   ).replace(/_/g, " ");
+  const billingBalanceLabel =
+    billingStatus?.billingBypass
+      ? "Unlimited"
+      : (billingStatus?.creditsBalance ?? 0).toLocaleString();
   const billingPeriodEndLabel = formatOptionalDate(
     billingStatus?.billing.polarCurrentPeriodEnd
   );
@@ -5189,7 +5194,7 @@ export default function ComposePage() {
                     Credit Balance
                   </p>
                   <p className="mt-1 text-xl font-semibold text-gray-900">
-                    {(billingStatus?.creditsBalance ?? 0).toLocaleString()}
+                    {billingBalanceLabel}
                   </p>
                 </div>
                 <div className="rounded border border-gray-200 bg-white p-3">
