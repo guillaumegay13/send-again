@@ -56,6 +56,12 @@ const features = [
     icon: "M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5a17.92 17.92 0 01-8.716-2.247m0 0A8.966 8.966 0 013 12c0-1.264.26-2.466.732-3.558",
   },
   {
+    title: "Multi-Domain Workspaces",
+    description:
+      "Create multiple workspaces, each with its own domain, contacts, and sending identity.",
+    icon: "M3.75 21h16.5M4.5 3h15M5.25 3v18m13.5-18v18M9 6.75h1.5m-1.5 3h1.5m-1.5 3h1.5m3-6H15m-1.5 3H15m-1.5 3H15M9 21v-3.375c0-.621.504-1.125 1.125-1.125h3.75c.621 0 1.125.504 1.125 1.125V21",
+  },
+  {
     title: "Open Source",
     description:
       "Fully open source. Self-host it, audit the code, or contribute. No vendor lock-in.",
@@ -198,7 +204,7 @@ export default async function LandingPage() {
           >
             Send campaigns, manage contacts, and track delivery.
             High deliverability via Amazon SES, a REST API for automation,
-            and transparent pricing. Fully open source.
+            and transparent pricing.
           </p>
           <Link
             href="/app"
