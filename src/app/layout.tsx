@@ -13,8 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Email Campaign",
-  description: "Compose and send HTML emails via AWS SES",
+  title: "Send Again — The open source email platform",
+  description:
+    "Send campaigns, manage contacts, and track delivery. High deliverability via Amazon SES, a REST API, and transparent pricing. Fully open source.",
 };
 
 export default function RootLayout({
