@@ -3,7 +3,7 @@ import { ReactNode } from "react";
 
 export interface AppSidebarNavItem {
   id: string;
-  label: string;
+  label: ReactNode;
   active?: boolean;
   href?: string;
   onClick?: () => void;

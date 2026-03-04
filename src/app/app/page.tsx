@@ -3499,7 +3499,7 @@ export default function ComposePage() {
         items={[
           ...(["compose", "contacts", "history", "campaigns", "settings"] as Tab[]).map((t) => ({
             id: t,
-            label: t,
+            label: t === "campaigns" ? <>{t}<span style={{ marginLeft: "0.375rem", fontSize: "0.625rem", fontWeight: 500, background: "var(--border)", borderRadius: "var(--radius-tight)", padding: "0.0625rem 0.3rem", verticalAlign: "middle", textTransform: "uppercase", letterSpacing: "0.04em" }}>Beta</span></> : t,
             active: tab === t,
             onClick: () => setTab(t),
           })),
