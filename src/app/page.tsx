@@ -239,6 +239,50 @@ interface Route53DnsSetupResult {
   changedRecords: number;
 }
 
+interface BillingStatusResponse {
+  workspaceId: string;
+  initialFreeCredits: number;
+  creditsBalance: number;
+  creditsConsumed: number;
+  creditsPurchased: number;
+  billingEnforced: boolean;
+  requiresTopUp: boolean;
+  billing: {
+    billingStatus: string;
+    billingEmail: string | null;
+    planName: string | null;
+    creditBalance: number;
+    lifetimeCreditsPurchased: number;
+    lifetimeCreditsConsumed: number;
+    polarCustomerId: string | null;
+    polarExternalCustomerId: string | null;
+    polarSubscriptionId: string | null;
+    polarSubscriptionStatus: string | null;
+    polarCurrentPeriodStart: string | null;
+    polarCurrentPeriodEnd: string | null;
+    updatedAt: string;
+  };
+}
+
+interface BillingPack {
+  id: string;
+  name: string;
+  credits: number;
+  amountCents: number;
+  currency: string;
+}
+
+interface BillingPacksResponse {
+  packs: BillingPack[];
+}
+
+interface BillingCheckoutResponse {
+  checkoutId: string;
+  checkoutUrl: string;
+  externalCustomerId: string;
+  pack: BillingPack;
+}
+
 type DnsProvider = "manual" | "namecheap" | "cloudflare" | "route53";
 
 type FieldOperator = "equals" | "notEquals" | "contains" | "notContains";
@@ -1125,6 +1169,26 @@ function buildPreviewDocument(html: string): string {
 </html>`;
 }
 
+function formatOptionalDate(value: string | null | undefined): string {
+  if (!value) return "Not set";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "Not set";
+  return parsed.toLocaleDateString();
+}
+
+function formatAmountCents(amountCents: number, currency: string): string {
+  const amount = Math.max(0, amountCents) / 100;
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: (currency || "usd").toUpperCase(),
+      maximumFractionDigits: 2,
+    }).format(amount);
+  } catch {
+    return `$${amount.toFixed(2)}`;
+  }
+}
+
 export default function ComposePage() {
   const [authLoading, setAuthLoading] = useState(true);
   const [sessionToken, setSessionToken] = useState<string | null>(null);
@@ -1227,6 +1291,17 @@ export default function ComposePage() {
     null
   );
   const [settingsSavedAtLabel, setSettingsSavedAtLabel] = useState<string | null>(
+    null
+  );
+  const [billingStatus, setBillingStatus] = useState<BillingStatusResponse | null>(
+    null
+  );
+  const [billingPacks, setBillingPacks] = useState<BillingPack[]>([]);
+  const [selectedBillingPackId, setSelectedBillingPackId] = useState("");
+  const [billingLoading, setBillingLoading] = useState(false);
+  const [billingError, setBillingError] = useState<string | null>(null);
+  const [billingInfo, setBillingInfo] = useState<string | null>(null);
+  const [billingAction, setBillingAction] = useState<"checkout" | null>(
     null
   );
 
@@ -1360,6 +1435,29 @@ export default function ComposePage() {
     setCloudflareStatus(null);
     setRoute53Status(null);
   }, [dnsProvider]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const params = new URLSearchParams(window.location.search);
+    const billingParam = params.get("billing");
+    if (!billingParam) return;
+
+    if (billingParam === "success") {
+      setBillingInfo(
+        "Payment captured. Credits are added after webhook confirmation."
+      );
+    } else if (billingParam === "back" || billingParam === "portal-return") {
+      setBillingInfo("Returned from Polar billing.");
+    }
+
+    params.delete("billing");
+    const nextQuery = params.toString();
+    const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${
+      window.location.hash
+    }`;
+    window.history.replaceState({}, "", nextUrl);
+  }, []);
 
   const clearSettingsSavedResetTimer = useCallback(() => {
     if (!settingsSavedResetRef.current) return;
@@ -1552,6 +1650,13 @@ export default function ComposePage() {
       setNamecheapStatus(null);
       setCloudflareStatus(null);
       setRoute53Status(null);
+      setBillingStatus(null);
+      setBillingPacks([]);
+      setSelectedBillingPackId("");
+      setBillingLoading(false);
+      setBillingError(null);
+      setBillingInfo(null);
+      setBillingAction(null);
       return;
     }
 
@@ -1621,6 +1726,13 @@ export default function ComposePage() {
     setNamecheapStatus(null);
     setCloudflareStatus(null);
     setRoute53Status(null);
+    setBillingStatus(null);
+    setBillingPacks([]);
+    setSelectedBillingPackId("");
+    setBillingLoading(false);
+    setBillingError(null);
+    setBillingInfo(null);
+    setBillingAction(null);
   }, [activeId]);
 
   useEffect(() => {
@@ -1869,6 +1981,48 @@ export default function ComposePage() {
       clearSettingsSavedResetTimer();
     };
   }, [clearSettingsSavedResetTimer, stopSendPolling]);
+
+  const refreshBillingData = useCallback(
+    async (workspaceId: string) => {
+      setBillingLoading(true);
+      setBillingError(null);
+      try {
+        const [statusData, packsData] = await Promise.all([
+          fetchJson<BillingStatusResponse>(
+            `/api/billing/status?workspace=${encodeURIComponent(workspaceId)}`
+          ),
+          fetchJson<BillingPacksResponse>(
+            `/api/billing/packs?workspace=${encodeURIComponent(workspaceId)}`
+          ),
+        ]);
+
+        if (activeWorkspaceIdRef.current !== workspaceId) return;
+
+        const packs = Array.isArray(packsData.packs) ? packsData.packs : [];
+        setBillingStatus(statusData);
+        setBillingPacks(packs);
+        setSelectedBillingPackId((current) => {
+          if (packs.some((pack) => pack.id === current)) {
+            return current;
+          }
+          return packs[0]?.id ?? "";
+        });
+      } catch (error) {
+        if (activeWorkspaceIdRef.current !== workspaceId) return;
+        setBillingError(error instanceof Error ? error.message : String(error));
+      } finally {
+        if (activeWorkspaceIdRef.current === workspaceId) {
+          setBillingLoading(false);
+        }
+      }
+    },
+    [fetchJson]
+  );
+
+  useEffect(() => {
+    if (!sessionToken || !activeId || tab !== "settings") return;
+    void refreshBillingData(activeId);
+  }, [sessionToken, activeId, tab, refreshBillingData]);
 
   const fetchSetupStatus = useCallback(async () => {
     if (!workspace) return;
@@ -2161,6 +2315,13 @@ export default function ComposePage() {
     setNamecheapStatus(null);
     setCloudflareStatus(null);
     setRoute53Status(null);
+    setBillingStatus(null);
+    setBillingPacks([]);
+    setSelectedBillingPackId("");
+    setBillingLoading(false);
+    setBillingError(null);
+    setBillingInfo(null);
+    setBillingAction(null);
   }
 
   async function addWorkspaceById(rawId: string) {
@@ -2267,6 +2428,53 @@ export default function ComposePage() {
       `/api/keys?workspace=${encodeURIComponent(activeId)}`
     );
     setApiKeys(data);
+  }
+
+  async function startBillingCheckout() {
+    if (!activeId || billingAction) return;
+
+    const packId = selectedBillingPackId || billingPacks[0]?.id;
+    if (!packId) {
+      setBillingError("No credit pack configured yet.");
+      return;
+    }
+
+    setBillingAction("checkout");
+    setBillingError(null);
+    setBillingInfo(null);
+    try {
+      const payload: {
+        workspaceId: string;
+        packId: string;
+        successUrl?: string;
+        returnUrl?: string;
+      } = {
+        workspaceId: activeId,
+        packId,
+      };
+
+      if (typeof window !== "undefined") {
+        payload.successUrl = `${window.location.origin}/?billing=success`;
+        payload.returnUrl = `${window.location.origin}/?billing=back`;
+      }
+
+      const data = await fetchJson<BillingCheckoutResponse>("/api/billing/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (typeof window !== "undefined" && data.checkoutUrl) {
+        window.location.assign(data.checkoutUrl);
+        return;
+      }
+
+      setBillingInfo("Checkout session created.");
+    } catch (error) {
+      setBillingError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBillingAction(null);
+    }
   }
 
   async function createApiKeyHandler() {
@@ -3198,6 +3406,49 @@ export default function ComposePage() {
   const canConfirmWorkspaceDelete =
     workspaceDeleteConfirmValue.trim().toLowerCase() ===
     (workspace?.id ?? "").toLowerCase();
+  const selectedBillingPack =
+    billingPacks.find((pack) => pack.id === selectedBillingPackId) ??
+    billingPacks[0] ??
+    null;
+  const billingStatusLabel = (
+    billingStatus?.billing.billingStatus || "inactive"
+  ).replace(/_/g, " ");
+  const billingPeriodEndLabel = formatOptionalDate(
+    billingStatus?.billing.polarCurrentPeriodEnd
+  );
+  const isBillingActionBusy = billingAction !== null;
+  const deliverabilityTotalChecks = 6;
+  const deliverabilityCompletedChecks = setupStatus
+    ? [
+        setupStatus.verificationStatus === "Success",
+        setupStatus.spfStatus === "Found",
+        setupStatus.dkimStatus === "Success",
+        setupStatus.dmarcStatus === "Found",
+        setupStatus.configSetExists,
+        setupStatus.unsubscribePageFound,
+      ].filter(Boolean).length
+    : 0;
+  const deliverabilityHasFailure = setupStatus
+    ? setupStatus.verificationStatus === "Failed" ||
+      setupStatus.dkimStatus === "Failed"
+    : false;
+  const deliverabilityHasPending = setupStatus
+    ? setupStatus.verificationStatus === "Pending" ||
+      setupStatus.dkimStatus === "Pending" ||
+      setupStatus.spfStatus === "Pending" ||
+      setupStatus.dmarcStatus === "Pending"
+    : false;
+  const deliverabilityStatus = !setupStatus
+    ? setupLoading
+      ? { label: "Checking...", className: "bg-blue-100 text-blue-700" }
+      : { label: "Not checked", className: "bg-gray-200 text-gray-700" }
+    : deliverabilityHasFailure
+    ? { label: "Needs attention", className: "bg-red-100 text-red-700" }
+    : deliverabilityCompletedChecks === deliverabilityTotalChecks
+    ? { label: "Ready", className: "bg-green-100 text-green-700" }
+    : deliverabilityHasPending || deliverabilityCompletedChecks > 0
+    ? { label: "In progress", className: "bg-yellow-100 text-yellow-700" }
+    : { label: "Not started", className: "bg-gray-200 text-gray-700" };
 
   return (
     <div className="app-shell">
@@ -4401,9 +4652,21 @@ export default function ComposePage() {
             </div>
             <p className="text-xs text-gray-400 mb-6">{workspace.name}</p>
 
-            <details open className="rounded border border-gray-200 bg-gray-50 p-4 mb-6 [&>summary]:list-none [&>summary::-webkit-details-marker]:hidden">
-              <summary className="cursor-pointer text-sm font-semibold text-gray-800">
-                Email Deliverability Setup
+            <details className="rounded border border-gray-200 bg-gray-50 p-4 mb-6 [&>summary]:list-none [&>summary::-webkit-details-marker]:hidden">
+              <summary className="cursor-pointer text-sm font-semibold text-gray-800 flex items-center justify-between gap-3">
+                <span>Email Deliverability Setup</span>
+                <span className="inline-flex items-center gap-2">
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${deliverabilityStatus.className}`}
+                  >
+                    {deliverabilityStatus.label}
+                  </span>
+                  {setupStatus && !setupLoading && (
+                    <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-gray-600">
+                      {deliverabilityCompletedChecks}/{deliverabilityTotalChecks}
+                    </span>
+                  )}
+                </span>
               </summary>
               <div className="flex items-center justify-between mt-3 mb-3">
                 <p className="text-xs text-gray-500">
@@ -4883,6 +5146,128 @@ export default function ComposePage() {
               </div>
             </details>
 
+            {/* Billing */}
+            <div className="border-t border-gray-200 pt-6 mt-6">
+              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-base font-semibold text-gray-900">
+                    Billing & Usage
+                  </h2>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Credit-based pricing. 1 recipient send consumes 1 credit.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!activeId) return;
+                    void refreshBillingData(activeId);
+                  }}
+                  disabled={!activeId || billingLoading || isBillingActionBusy}
+                  className="rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {billingLoading ? "Refreshing..." : "Refresh billing"}
+                </button>
+              </div>
+
+              {billingError && (
+                <p className="mb-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                  {billingError}
+                </p>
+              )}
+              {billingInfo && (
+                <p className="mb-3 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+                  {billingInfo}
+                </p>
+              )}
+
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded border border-gray-200 bg-white p-3">
+                  <p className="text-[11px] uppercase tracking-wide text-gray-500">
+                    Credit Balance
+                  </p>
+                  <p className="mt-1 text-xl font-semibold text-gray-900">
+                    {(billingStatus?.creditsBalance ?? 0).toLocaleString()}
+                  </p>
+                </div>
+                <div className="rounded border border-gray-200 bg-white p-3">
+                  <p className="text-[11px] uppercase tracking-wide text-gray-500">
+                    Credits Used
+                  </p>
+                  <p className="mt-1 text-xl font-semibold text-gray-900">
+                    {(billingStatus?.creditsConsumed ?? 0).toLocaleString()}
+                  </p>
+                </div>
+                <div className="rounded border border-gray-200 bg-white p-3">
+                  <p className="text-[11px] uppercase tracking-wide text-gray-500">
+                    Credits Purchased
+                  </p>
+                  <p className="mt-1 text-xl font-semibold text-gray-900">
+                    {(billingStatus?.creditsPurchased ?? 0).toLocaleString()}
+                  </p>
+                </div>
+                <div className="rounded border border-gray-200 bg-white p-3">
+                  <p className="text-[11px] uppercase tracking-wide text-gray-500">
+                    Billing Status
+                  </p>
+                  <p className="mt-1 text-xl font-semibold capitalize text-gray-900">
+                    {billingStatusLabel}
+                  </p>
+                  <p className="mt-1 text-[11px] text-gray-500">
+                    Period end: {billingPeriodEndLabel}
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4 rounded border border-gray-200 bg-gray-50 p-4">
+                <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs font-medium text-gray-600">Credit pack</span>
+                    <FancySelect
+                      wrapperClassName="w-full"
+                      value={selectedBillingPack?.id ?? ""}
+                      onChange={(event) => setSelectedBillingPackId(event.target.value)}
+                      className="h-10 border-gray-300 text-sm focus:border-black focus:ring-black/10"
+                    >
+                      {billingPacks.length === 0 ? (
+                        <option value="">No packs configured</option>
+                      ) : (
+                        billingPacks.map((pack) => (
+                          <option key={pack.id} value={pack.id}>
+                            {pack.name} · {pack.credits.toLocaleString()} credits ·{" "}
+                            {formatAmountCents(pack.amountCents, pack.currency)}
+                          </option>
+                        ))
+                      )}
+                    </FancySelect>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => void startBillingCheckout()}
+                    disabled={!selectedBillingPack || billingLoading || isBillingActionBusy}
+                    className="rounded bg-black px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {billingAction === "checkout"
+                      ? "Opening checkout..."
+                      : selectedBillingPack
+                      ? `Buy ${selectedBillingPack.credits.toLocaleString()} credits (${formatAmountCents(
+                          selectedBillingPack.amountCents,
+                          selectedBillingPack.currency
+                        )})`
+                      : "Buy credits"}
+                  </button>
+                </div>
+                <p className="mt-2 text-[11px] text-gray-500">
+                  Credits are added when the Polar webhook confirms payment.
+                </p>
+                {billingStatus?.billingEnforced && billingStatus.requiresTopUp && (
+                  <p className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-700">
+                    No credits remaining. Top up to continue sending.
+                  </p>
+                )}
+              </div>
+            </div>
+
             {/* Sender */}
             <div className="border-t border-gray-200 pt-6 mt-6">
               <h2 className="text-base font-semibold text-gray-900 mb-4">Sender</h2>
@@ -4993,20 +5378,6 @@ export default function ComposePage() {
             <div className="border-t border-gray-200 pt-6 mt-6">
               <h2 className="text-base font-semibold text-gray-900 mb-4">Sending</h2>
               <div className="flex flex-col gap-5 max-w-xl">
-                <label className="flex flex-col gap-1">
-                  <span className="text-sm font-medium text-gray-600">
-                    SES Configuration Set
-                  </span>
-                  <input
-                    type="text"
-                    value={workspace.configSet}
-                    onChange={(e) =>
-                      updateWorkspace({ configSet: e.target.value })
-                    }
-                    className="border border-gray-300 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-black"
-                  />
-                </label>
-
                 <label className="flex flex-col gap-1">
                   <span className="text-sm font-medium text-gray-600">
                     Website URL (domain page link)

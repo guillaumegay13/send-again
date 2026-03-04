@@ -1,11 +1,13 @@
 import { sendEmail } from "@/lib/ses";
 import { appendWorkspaceFooter } from "@/lib/email-footer";
 import { buildUnsubscribeUrl } from "@/lib/unsubscribe";
+import { isBillingEnforced } from "@/lib/billing";
 import {
   claimQueuedSendJob,
   claimRunningSendJob,
   claimStaleRunningSendJob,
   countSendJobRecipientsByStatus,
+  consumeWorkspaceCredits,
   getContactsByEmails,
   getQueuedOrRunningSendJobs,
   getSendJobWorkerContext,
@@ -276,6 +278,17 @@ async function processSendJob(
       const wave = waves[waveIndex];
       const waveResult = await Promise.all(
         wave.map(async (recipient) => {
+          if (isBillingEnforced()) {
+            const credit = await consumeWorkspaceCredits(context.workspaceId, 1);
+            if (!credit.ok) {
+              await markSendJobRecipientFailed(
+                recipient.id,
+                "Insufficient credits"
+              );
+              return { ok: false as const, recipientId: recipient.id };
+            }
+          }
+
           const contact = contactMap.get(recipient.recipient.toLowerCase());
           const vars = {
             email: recipient.recipient,
@@ -320,17 +333,18 @@ async function processSendJob(
               });
             }
 
-            return { ok: true };
+            return { ok: true as const, recipientId: recipient.id };
           } catch (error) {
             const message = trimMessage(error);
             await markSendJobRecipientFailed(recipient.id, message);
-            return { ok: false };
+            return { ok: false as const, recipientId: recipient.id };
           }
         })
       );
 
-      sent += waveResult.filter((result) => result.ok).length;
-      failed += waveResult.filter((result) => !result.ok).length;
+      const sentInWave = waveResult.filter((result) => result.ok);
+      sent += sentInWave.length;
+      failed += waveResult.length - sentInWave.length;
 
       if (context.rateLimit > 0 && waveIndex < waves.length - 1) {
         await wait(context.rateLimit);

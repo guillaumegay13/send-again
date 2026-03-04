@@ -11,6 +11,7 @@
   "dependencies": {
     "@aws-sdk/client-route-53": "^3.999.0",
     "@aws-sdk/client-ses": "^3.989.0",
+    "@polar-sh/sdk": "^0.46.1",
     "@supabase/supabase-js": "^2.57.4",
     "dagre": "^0.8.5",
     "next": "16.1.6",

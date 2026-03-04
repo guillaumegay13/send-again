@@ -44,6 +44,17 @@ NAMECHEAP_SANDBOX=false
 CLOUDFLARE_API_TOKEN=your-cloudflare-api-token
 CLOUDFLARE_ZONE_ID=optional-cloudflare-zone-id
 ROUTE53_HOSTED_ZONE_ID=optional-route53-hosted-zone-id
+BILLING_ENFORCED=false
+FREE_TIER_INITIAL_CREDITS=1000
+POLAR_ACCESS_TOKEN=your-polar-organization-access-token
+POLAR_SERVER=sandbox
+POLAR_CREDIT_PACKS_JSON=[{"id":"topup_10","name":"$10 Top-up","productId":"your-polar-product-id","credits":10000,"amountCents":1000,"currency":"usd"}]
+POLAR_PRODUCT_ID=optional-fallback-product-id
+POLAR_DEFAULT_PACK_CREDITS=10000
+POLAR_DEFAULT_PACK_AMOUNT_CENTS=1000
+POLAR_DEFAULT_PACK_CURRENCY=usd
+POLAR_WEBHOOK_SECRET=your-polar-webhook-secret
+POLAR_CREDIT_METADATA_KEY=email_credits
 ```
 
 | Variable | Required | Default | Description |
@@ -79,6 +90,17 @@ ROUTE53_HOSTED_ZONE_ID=optional-route53-hosted-zone-id
 | `SEND_JOB_STATUS_INLINE_PROCESS` | No | `true` | Let `GET /api/send/status` process active jobs inline (fallback when no cron worker runs) |
 | `SEND_JOB_STATUS_INLINE_MAX_JOBS` | No | `3` | Max jobs processed per status poll when inline fallback is enabled |
 | `SEND_JOB_STATUS_INLINE_MAX_RECIPIENTS` | No | `50` | Max recipients processed per status poll when inline fallback is enabled |
+| `BILLING_ENFORCED` | No | `false` | Enforce credit checks in the send worker (`true`/`false`) |
+| `FREE_TIER_INITIAL_CREDITS` | No | `1000` | One-time free credits granted to a workspace when billing profile is created |
+| `POLAR_ACCESS_TOKEN` | No | — | Polar organization access token (required for checkout, portal, and webhook sync) |
+| `POLAR_SERVER` | No | `sandbox` | Polar environment (`sandbox` or `production`) |
+| `POLAR_CREDIT_PACKS_JSON` | No | — | JSON array of top-up packs (`id`, `name`, `productId`, `credits`, `amountCents`, `currency`) exposed to checkout |
+| `POLAR_PRODUCT_ID` | No | — | Optional fallback product ID if `POLAR_CREDIT_PACKS_JSON` is not set |
+| `POLAR_DEFAULT_PACK_CREDITS` | No | `10000` | Optional fallback credits for the fallback `POLAR_PRODUCT_ID` |
+| `POLAR_DEFAULT_PACK_AMOUNT_CENTS` | No | `1000` | Optional fallback fixed price (in cents) for the fallback `POLAR_PRODUCT_ID` |
+| `POLAR_DEFAULT_PACK_CURRENCY` | No | `usd` | Optional fallback currency for the fallback `POLAR_PRODUCT_ID` |
+| `POLAR_WEBHOOK_SECRET` | No | — | Secret used to verify `/api/webhooks/polar` signatures |
+| `POLAR_CREDIT_METADATA_KEY` | No | `email_credits` | Product metadata key used as fallback to resolve credits on `order.paid` |
 
 ### Database
 
@@ -110,13 +132,43 @@ Then create your user in Supabase Authentication (Email provider enabled):
   - API key (`sk_...`) works on `/api/contacts`, `POST /api/send`, `GET /api/send/status`, and `GET /api/send/jobs`.
   - API key scopes: `contacts.read`, `contacts.write`, `send.read`, `send.write`.
   - Existing keys keep full access by default (backward compatible).
-  - `POST /api/send/process` uses `SEND_JOB_PROCESSOR_TOKEN` (if configured), not workspace API keys.
+- `POST /api/send/process` uses `SEND_JOB_PROCESSOR_TOKEN` (if configured), not workspace API keys.
+- If billing is enforced and credits are insufficient, `POST /api/send` returns `402` with billing details.
+
+### Polar Billing API
+
+- `GET /api/billing/packs?workspace=<id>` → list available top-up packs for the workspace.
+- `POST /api/billing/checkout` → create a Polar checkout session for a selected top-up pack (workspace owner only).
+- `POST /api/billing/portal` → create a Polar customer portal session (workspace owner only).
+- `GET /api/billing/status?workspace=<id>` → current billing state + credit balance.
+- `POST /api/webhooks/polar` → Polar webhook endpoint.
+
+Polar access token scopes required:
+
+- `checkouts:write`
+- `customer_sessions:write`
+- `customers:read`
+- `customers:write`
 
 Production recommendation:
 
 - Use a cron or worker to call `POST /api/send/process` every minute.
 - Keep `SEND_JOB_PROCESSOR_TOKEN` set and pass it in `x-send-job-token` or `Authorization: Bearer ...`.
 - Keep inline fallback enabled unless you have a reliable external worker.
+
+Polar setup checklist:
+
+1. Create one-time Polar products for each top-up pack (for example `$10`, `$25`, `$50`).
+2. Configure `POLAR_CREDIT_PACKS_JSON` with product IDs, credit amounts, and fixed prices (`amountCents`) for each top-up pack.
+3. Optionally set product metadata key `email_credits` (or your `POLAR_CREDIT_METADATA_KEY`) as a fallback.
+4. Set webhook URL to `https://your-domain/api/webhooks/polar` and subscribe at least:
+   - `order.paid`
+   - `subscription.created`
+   - `subscription.updated`
+   - `subscription.active`
+   - `subscription.canceled`
+   - `subscription.revoked`
+   - `customer.state_changed`
 
 ### SNS Webhook (for event tracking)
 

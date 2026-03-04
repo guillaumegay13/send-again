@@ -3,12 +3,19 @@ import {
   createSendJob,
   failSendJobWithMessage,
   getPreferredWorkspaceUserId,
+  getOrCreateWorkspaceBilling,
   getContacts,
   getUnsubscribedEmailSet,
   insertSendJobRecipients,
 } from "@/lib/db";
 import { processSendJobs } from "@/lib/send-job-processor";
 import { apiErrorResponse, requireWorkspaceAuth } from "@/lib/auth";
+import {
+  getInitialFreeCredits,
+  isBillingEnabled,
+  isBillingEnforced,
+} from "@/lib/billing";
+import { getSesConfigurationSetName } from "@/lib/ses-config";
 
 interface SendBody {
   workspaceId: string;
@@ -30,6 +37,14 @@ type RecipientMode =
   | "all_contacts"
   | "verified_contacts"
   | "unverified_contacts";
+
+interface SendBillingSummary {
+  creditBalance: number;
+  creditsRequired: number;
+  initialFreeCredits: number;
+  billingStatus: string;
+  hasEnoughCredits: boolean;
+}
 
 function normalizeRecipientMode(value: unknown): RecipientMode {
   if (value === "all_contacts") return "all_contacts";
@@ -90,7 +105,7 @@ function normalizeSendRequestBody(raw: unknown): SendBody {
   const footerHtml = String(body.footerHtml ?? "");
   const websiteUrl = String(body.websiteUrl ?? "");
   const rateLimit = normalizeRateLimit(body.rateLimit);
-  const configSet = String(body.configSet ?? "email-tracking-config-set").trim();
+  const configSet = getSesConfigurationSetName();
   const recipientMode = normalizeRecipientMode(body.recipientMode);
   const dryRun = typeof body.dryRun === "boolean" ? body.dryRun : false;
   const to = Array.isArray(body.to)
@@ -137,8 +152,7 @@ export async function POST(req: NextRequest) {
     if (
       !body.from ||
       !body.subject ||
-      !body.html ||
-      !body.configSet
+      !body.html
     ) {
       return NextResponse.json(
         { error: "Missing required fields" },
@@ -211,6 +225,32 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    let billingSummary: SendBillingSummary | null = null;
+    if (isBillingEnabled()) {
+      const billing = await getOrCreateWorkspaceBilling(workspaceId);
+      const creditsRequired = recipients.length;
+      const hasEnoughCredits = billing.creditBalance >= creditsRequired;
+
+      billingSummary = {
+        creditBalance: billing.creditBalance,
+        creditsRequired,
+        initialFreeCredits: getInitialFreeCredits(),
+        billingStatus: billing.billingStatus,
+        hasEnoughCredits,
+      };
+
+      if (!body.dryRun && isBillingEnforced() && !hasEnoughCredits) {
+        return NextResponse.json(
+          {
+            error:
+              "Insufficient credits. Please top up your balance to continue sending.",
+            billing: billingSummary,
+          },
+          { status: 402 }
+        );
+      }
+    }
+
     const baseUrl =
       process.env.APP_BASE_URL?.trim() ||
       process.env.NEXT_PUBLIC_APP_URL?.trim() ||
@@ -234,6 +274,7 @@ export async function POST(req: NextRequest) {
         sent: recipients.length,
         skippedUnsubscribed: unsubscribed.size,
         dryRun: true,
+        billing: billingSummary,
       });
     }
 
@@ -305,6 +346,7 @@ export async function POST(req: NextRequest) {
       total: recipients.length,
       skippedUnsubscribed: unsubscribed.size,
       dryRun: false,
+      billing: billingSummary,
     });
   } catch (error) {
     return apiErrorResponse(error, "Failed to start send job");

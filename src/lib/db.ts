@@ -4,6 +4,11 @@ import {
   isFullApiKeyScopeSet,
   resolveStoredApiKeyScopes,
 } from "@/lib/api-key-scopes";
+import {
+  getInitialFreeCredits,
+  normalizeBillingStatus,
+  type WorkspaceBillingStatus,
+} from "@/lib/billing";
 
 const globalDb = globalThis as unknown as { __supabaseDb?: SupabaseClient };
 
@@ -133,8 +138,6 @@ export type ContactSourceProvider = "manual" | "http_json";
 
 function normalizeContactSourceProvider(value: unknown): ContactSourceProvider {
   if (value === "http_json") return "http_json";
-  // Backward compatibility for early integration value.
-  if (value === "airconcierge") return "http_json";
   return "manual";
 }
 
@@ -547,6 +550,28 @@ export async function deleteWorkspaceData(workspaceId: string): Promise<void> {
     assertNoError(apiKeysError, "Failed to delete workspace API keys");
   }
 
+  const { error: workspaceCreditGrantsError } = await db
+    .from("workspace_credit_grants")
+    .delete()
+    .eq("workspace_id", workspaceId);
+  if (!isMissingTableError(workspaceCreditGrantsError, "workspace_credit_grants")) {
+    assertNoError(
+      workspaceCreditGrantsError,
+      "Failed to delete workspace credit grants"
+    );
+  }
+
+  const { error: workspaceBillingError } = await db
+    .from("workspace_billing")
+    .delete()
+    .eq("workspace_id", workspaceId);
+  if (!isMissingTableError(workspaceBillingError, "workspace_billing")) {
+    assertNoError(
+      workspaceBillingError,
+      "Failed to delete workspace billing settings"
+    );
+  }
+
   const { error: settingsError } = await db
     .from("workspace_settings")
     .delete()
@@ -940,6 +965,290 @@ export async function upsertWorkspaceSettings(settings: {
     assertNoError(error, "Failed to upsert workspace settings");
     return;
   }
+}
+
+// --- Billing ---
+
+export interface WorkspaceBilling {
+  workspaceId: string;
+  billingStatus: WorkspaceBillingStatus;
+  billingEmail: string;
+  planName: string;
+  creditBalance: number;
+  lifetimeCreditsPurchased: number;
+  lifetimeCreditsConsumed: number;
+  polarCustomerId: string | null;
+  polarExternalCustomerId: string;
+  polarSubscriptionId: string | null;
+  polarSubscriptionStatus: string | null;
+  polarCurrentPeriodStart: string | null;
+  polarCurrentPeriodEnd: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface WorkspaceBillingRow {
+  workspace_id: unknown;
+  billing_status: unknown;
+  billing_email: unknown;
+  plan_name: unknown;
+  credit_balance: unknown;
+  lifetime_credits_purchased: unknown;
+  lifetime_credits_consumed: unknown;
+  polar_customer_id: unknown;
+  polar_external_customer_id: unknown;
+  polar_subscription_id: unknown;
+  polar_subscription_status: unknown;
+  polar_current_period_start: unknown;
+  polar_current_period_end: unknown;
+  created_at: unknown;
+  updated_at: unknown;
+}
+
+function defaultPolarExternalCustomerIdForWorkspace(workspaceId: string): string {
+  return `workspace:${workspaceId.trim().toLowerCase()}`;
+}
+
+function normalizeNonNegativeInt(value: unknown, fallback = 0): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(0, Math.floor(parsed));
+}
+
+function normalizeWorkspaceBillingRow(row: WorkspaceBillingRow): WorkspaceBilling {
+  return {
+    workspaceId: String(row.workspace_id ?? ""),
+    billingStatus: normalizeBillingStatus(row.billing_status),
+    billingEmail: String(row.billing_email ?? ""),
+    planName: String(row.plan_name ?? "free"),
+    creditBalance: normalizeNonNegativeInt(row.credit_balance),
+    lifetimeCreditsPurchased: normalizeNonNegativeInt(
+      row.lifetime_credits_purchased
+    ),
+    lifetimeCreditsConsumed: normalizeNonNegativeInt(
+      row.lifetime_credits_consumed
+    ),
+    polarCustomerId:
+      row.polar_customer_id == null ? null : String(row.polar_customer_id),
+    polarExternalCustomerId: String(row.polar_external_customer_id ?? ""),
+    polarSubscriptionId:
+      row.polar_subscription_id == null
+        ? null
+        : String(row.polar_subscription_id),
+    polarSubscriptionStatus:
+      row.polar_subscription_status == null
+        ? null
+        : String(row.polar_subscription_status),
+    polarCurrentPeriodStart:
+      row.polar_current_period_start == null
+        ? null
+        : String(row.polar_current_period_start),
+    polarCurrentPeriodEnd:
+      row.polar_current_period_end == null
+        ? null
+        : String(row.polar_current_period_end),
+    createdAt: String(row.created_at ?? ""),
+    updatedAt: String(row.updated_at ?? ""),
+  };
+}
+
+export async function getWorkspaceBilling(
+  workspaceId: string
+): Promise<WorkspaceBilling | null> {
+  const db = getDb();
+  const { data, error } = await db
+    .from("workspace_billing")
+    .select("*")
+    .eq("workspace_id", workspaceId)
+    .limit(1);
+  if (isMissingTableError(error, "workspace_billing")) {
+    throw new Error(
+      "Database schema missing `workspace_billing` table. Run the latest supabase/schema.sql."
+    );
+  }
+  assertNoError(error, "Failed to fetch workspace billing settings");
+
+  const row = (data ?? [])[0] as WorkspaceBillingRow | undefined;
+  return row ? normalizeWorkspaceBillingRow(row) : null;
+}
+
+export async function getOrCreateWorkspaceBilling(
+  workspaceId: string
+): Promise<WorkspaceBilling> {
+  const normalizedWorkspaceId = workspaceId.trim().toLowerCase();
+  const existing = await getWorkspaceBilling(normalizedWorkspaceId);
+  if (existing) {
+    return existing;
+  }
+
+  const db = getDb();
+  const now = new Date().toISOString();
+  const freeCredits = getInitialFreeCredits();
+  const { error } = await db.from("workspace_billing").insert({
+    workspace_id: normalizedWorkspaceId,
+    billing_status: "inactive",
+    billing_email: "",
+    plan_name: "free",
+    credit_balance: freeCredits,
+    lifetime_credits_purchased: freeCredits,
+    lifetime_credits_consumed: 0,
+    polar_external_customer_id:
+      defaultPolarExternalCustomerIdForWorkspace(normalizedWorkspaceId),
+    updated_at: now,
+  });
+  if (isMissingTableError(error, "workspace_billing")) {
+    throw new Error(
+      "Database schema missing `workspace_billing` table. Run the latest supabase/schema.sql."
+    );
+  }
+  const conflictError =
+    !!error &&
+    /duplicate key value violates unique constraint/i.test(error.message);
+  if (!conflictError) {
+    assertNoError(error, "Failed to create workspace billing settings");
+  }
+
+  const profile = await getWorkspaceBilling(normalizedWorkspaceId);
+  if (!profile) {
+    throw new Error("Failed to read workspace billing settings");
+  }
+  return profile;
+}
+
+export async function upsertWorkspaceBilling(params: {
+  workspaceId: string;
+  billingStatus?: WorkspaceBillingStatus;
+  billingEmail?: string;
+  planName?: string;
+  creditBalance?: number;
+  lifetimeCreditsPurchased?: number;
+  lifetimeCreditsConsumed?: number;
+  polarCustomerId?: string | null;
+  polarExternalCustomerId?: string;
+  polarSubscriptionId?: string | null;
+  polarSubscriptionStatus?: string | null;
+  polarCurrentPeriodStart?: string | null;
+  polarCurrentPeriodEnd?: string | null;
+}): Promise<void> {
+  const normalizedWorkspaceId = params.workspaceId.trim().toLowerCase();
+  const payload: Record<string, unknown> = {
+    workspace_id: normalizedWorkspaceId,
+    polar_external_customer_id:
+      params.polarExternalCustomerId ||
+      defaultPolarExternalCustomerIdForWorkspace(normalizedWorkspaceId),
+    updated_at: new Date().toISOString(),
+  };
+
+  if (params.billingStatus !== undefined) {
+    payload.billing_status = params.billingStatus;
+  }
+  if (params.billingEmail !== undefined) {
+    payload.billing_email = params.billingEmail;
+  }
+  if (params.planName !== undefined) {
+    payload.plan_name = params.planName;
+  }
+  if (params.creditBalance !== undefined) {
+    payload.credit_balance = normalizeNonNegativeInt(params.creditBalance);
+  }
+  if (params.lifetimeCreditsPurchased !== undefined) {
+    payload.lifetime_credits_purchased = normalizeNonNegativeInt(
+      params.lifetimeCreditsPurchased
+    );
+  }
+  if (params.lifetimeCreditsConsumed !== undefined) {
+    payload.lifetime_credits_consumed = normalizeNonNegativeInt(
+      params.lifetimeCreditsConsumed
+    );
+  }
+  if (params.polarCustomerId !== undefined) {
+    payload.polar_customer_id = params.polarCustomerId;
+  }
+  if (params.polarSubscriptionId !== undefined) {
+    payload.polar_subscription_id = params.polarSubscriptionId;
+  }
+  if (params.polarSubscriptionStatus !== undefined) {
+    payload.polar_subscription_status = params.polarSubscriptionStatus;
+  }
+  if (params.polarCurrentPeriodStart !== undefined) {
+    payload.polar_current_period_start = params.polarCurrentPeriodStart;
+  }
+  if (params.polarCurrentPeriodEnd !== undefined) {
+    payload.polar_current_period_end = params.polarCurrentPeriodEnd;
+  }
+
+  const db = getDb();
+  const { error } = await db
+    .from("workspace_billing")
+    .upsert(payload, { onConflict: "workspace_id" });
+  if (isMissingTableError(error, "workspace_billing")) {
+    throw new Error(
+      "Database schema missing `workspace_billing` table. Run the latest supabase/schema.sql."
+    );
+  }
+  assertNoError(error, "Failed to upsert workspace billing settings");
+}
+
+export async function applyWorkspaceCreditTopup(params: {
+  workspaceId: string;
+  sourceId: string;
+  credits: number;
+  amountCents?: number;
+  currency?: string;
+  metadata?: Record<string, unknown>;
+}): Promise<boolean> {
+  const db = getDb();
+  const normalizedWorkspaceId = params.workspaceId.trim().toLowerCase();
+  const normalizedCredits = normalizeNonNegativeInt(params.credits);
+  if (normalizedCredits <= 0) {
+    return false;
+  }
+  const { data, error } = await db.rpc("apply_workspace_credit_topup", {
+    p_workspace_id: normalizedWorkspaceId,
+    p_source_id: params.sourceId,
+    p_credits: normalizedCredits,
+    p_amount_cents: normalizeNonNegativeInt(params.amountCents ?? 0),
+    p_currency: String(params.currency ?? "")
+      .trim()
+      .toUpperCase()
+      .slice(0, 16),
+    p_metadata: params.metadata ?? {},
+  });
+  assertNoError(error, "Failed to apply workspace credit top-up");
+  if (Array.isArray(data)) {
+    const first = (data[0] ?? null) as { apply_workspace_credit_topup?: boolean } | null;
+    return !!first?.apply_workspace_credit_topup;
+  }
+  return !!data;
+}
+
+export async function consumeWorkspaceCredits(
+  workspaceId: string,
+  credits = 1
+): Promise<{ ok: boolean; balance: number }> {
+  const db = getDb();
+  const normalizedWorkspaceId = workspaceId.trim().toLowerCase();
+  const normalizedCredits = Math.max(1, normalizeNonNegativeInt(credits, 1));
+  const { data, error } = await db.rpc("consume_workspace_credits", {
+    p_workspace_id: normalizedWorkspaceId,
+    p_credits: normalizedCredits,
+  });
+  assertNoError(error, "Failed to consume workspace credits");
+
+  const first = Array.isArray(data) ? (data[0] ?? null) : null;
+  if (
+    first &&
+    typeof first === "object" &&
+    "ok" in first &&
+    "balance" in first
+  ) {
+    return {
+      ok: !!(first as { ok: unknown }).ok,
+      balance: normalizeNonNegativeInt((first as { balance: unknown }).balance),
+    };
+  }
+
+  return { ok: false, balance: 0 };
 }
 
 // --- Sends & Events ---

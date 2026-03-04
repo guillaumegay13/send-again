@@ -8,6 +8,7 @@ import {
   getWorkspaceSettings,
   userIsWorkspaceOwner,
 } from "@/lib/db";
+import { getSesConfigurationSetName } from "@/lib/ses-config";
 import {
   apiErrorResponse,
   getInitialOwnerEmail,
@@ -37,6 +38,7 @@ async function getVerifiedDomainsSafe(): Promise<string[]> {
 export async function GET(req: NextRequest) {
   try {
     const user = await requireAuthenticatedUser(req);
+    const configSetName = getSesConfigurationSetName();
     const domains = await getVerifiedDomainsSafe();
     if (user.email === getInitialOwnerEmail()) {
       // Preserve existing workspace data by claiming current SES domains
@@ -57,7 +59,7 @@ export async function GET(req: NextRequest) {
         name: workspaceId,
         from: saved?.from_address ?? `noreply@${workspaceId}`,
         fromName: saved?.from_name ?? "",
-        configSet: saved?.config_set ?? "email-tracking-config-set",
+        configSet: configSetName,
         rateLimit: saved?.rate_limit ?? 300,
         footerHtml: saved?.footer_html ?? "",
         websiteUrl: saved?.website_url || `https://${workspaceId}`,
@@ -75,6 +77,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const user = await requireAuthenticatedUser(req);
+    const configSetName = getSesConfigurationSetName();
     const body = await req.json();
     const workspaceId = normalizeWorkspaceId(body?.id);
     if (!workspaceId) {
@@ -96,7 +99,7 @@ export async function POST(req: NextRequest) {
       name: workspaceId,
       from: saved?.from_address ?? `noreply@${workspaceId}`,
       fromName: saved?.from_name ?? "",
-      configSet: saved?.config_set ?? "email-tracking-config-set",
+      configSet: configSetName,
       rateLimit: saved?.rate_limit ?? 300,
       footerHtml: saved?.footer_html ?? "",
       websiteUrl: saved?.website_url || `https://${workspaceId}`,

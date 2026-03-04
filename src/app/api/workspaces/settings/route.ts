@@ -4,6 +4,7 @@ import {
   upsertWorkspaceSettings,
   userCanAccessWorkspace,
 } from "@/lib/db";
+import { getSesConfigurationSetName } from "@/lib/ses-config";
 import { apiErrorResponse, requireAuthenticatedUser } from "@/lib/auth";
 
 function normalizeWebsiteUrl(value: unknown): string | null {
@@ -29,7 +30,6 @@ function normalizeFromName(value: unknown): string {
 
 function normalizeContactSourceProvider(value: unknown): ContactSourceProvider {
   if (value === "http_json") return "http_json";
-  if (value === "airconcierge") return "http_json";
   return "manual";
 }
 
@@ -54,7 +54,6 @@ export async function PUT(req: NextRequest) {
       id,
       from,
       fromName,
-      configSet,
       rateLimit,
       footerHtml,
       websiteUrl,
@@ -94,7 +93,7 @@ export async function PUT(req: NextRequest) {
       id,
       from,
       fromName: normalizeFromName(fromName),
-      configSet: configSet ?? "email-tracking-config-set",
+      configSet: getSesConfigurationSetName(),
       rateLimit: rateLimit ?? 300,
       footerHtml: typeof footerHtml === "string" ? footerHtml : "",
       websiteUrl: normalizedWebsiteUrl,
