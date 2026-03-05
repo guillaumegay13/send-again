@@ -53,20 +53,6 @@ function normalizeEmail(value: string | undefined): string {
   return (value ?? "").trim().toLowerCase();
 }
 
-function getAllowedEmails(): string[] {
-  const explicit =
-    process.env.ALLOWED_AUTH_EMAILS ?? process.env.AUTHORIZED_EMAILS;
-  const raw =
-    explicit && explicit.trim().length > 0
-      ? explicit
-      : process.env.INITIAL_OWNER_EMAIL ?? "guillaume.gay@protonmail.com";
-
-  return raw
-    .split(",")
-    .map((part) => normalizeEmail(part))
-    .filter(Boolean);
-}
-
 export function getInitialOwnerEmail(): string {
   return normalizeEmail(
     process.env.INITIAL_OWNER_EMAIL ?? "guillaume.gay@protonmail.com"
@@ -100,11 +86,6 @@ export async function requireAuthenticatedUser(
   const email = normalizeEmail(data.user.email);
   if (!email) {
     throw new ApiAuthError("Account email is required", 403);
-  }
-
-  const allowedEmails = getAllowedEmails();
-  if (!allowedEmails.includes(email)) {
-    throw new ApiAuthError("This account is not authorized", 403);
   }
 
   return { id: data.user.id, email };
@@ -163,11 +144,6 @@ export async function requireWorkspaceAuth(
   const email = normalizeEmail(data.user.email);
   if (!email) {
     throw new ApiAuthError("Account email is required", 403);
-  }
-
-  const allowedEmails = getAllowedEmails();
-  if (!allowedEmails.includes(email)) {
-    throw new ApiAuthError("This account is not authorized", 403);
   }
 
   const workspace = workspaceFromParam ?? null;
