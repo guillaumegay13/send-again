@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import {
   Fragment,
   useState,
@@ -134,6 +135,7 @@ const HISTORY_TABLE_PAGE_SIZE = 25;
 const CONTACTS_TABLE_PAGE_SIZE = 200;
 const CONTACT_IMPORT_BATCH_SIZE = 1000;
 const NAMECHEAP_DNS_STORAGE_KEY = "send-again.namecheap-dns";
+const LEGAL_ACCEPTANCE_VERSION = "2026-03-06";
 const API_KEY_SCOPE_OPTIONS: Array<{ value: ApiKeyScope; label: string }> = [
   { value: "contacts.read", label: "Contacts read" },
   { value: "contacts.write", label: "Contacts write" },
@@ -1197,6 +1199,7 @@ export default function ComposePage() {
   const [authMode, setAuthMode] = useState<"sign-in" | "sign-up">("sign-in");
   const [loginEmail, setLoginEmail] = useState("guillaume.gay@protonmail.com");
   const [loginPassword, setLoginPassword] = useState("");
+  const [acceptedLegal, setAcceptedLegal] = useState(false);
   const [loggingIn, setLoggingIn] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authMessage, setAuthMessage] = useState<string | null>(null);
@@ -2248,10 +2251,26 @@ export default function ComposePage() {
     setAuthError(null);
     setAuthMessage(null);
     try {
+      if (!acceptedLegal) {
+        setAuthError(
+          "You must accept the Terms of Use and Privacy Policy to create an account."
+        );
+        return;
+      }
+
       const supabase = getBrowserSupabaseClient();
+      const acceptedAt = new Date().toISOString();
       const { data, error } = await supabase.auth.signUp({
         email: loginEmail.trim(),
         password: loginPassword,
+        options: {
+          data: {
+            legalAcceptedAt: acceptedAt,
+            legalAcceptedVersion: LEGAL_ACCEPTANCE_VERSION,
+            privacyAcceptedAt: acceptedAt,
+            termsAcceptedAt: acceptedAt,
+          },
+        },
       });
       if (error) {
         setAuthError(error.message);
@@ -3288,6 +3307,53 @@ export default function ComposePage() {
                 required
               />
             </label>
+
+            {authMode === "sign-up" && (
+              <div className="rounded border border-gray-200 bg-gray-50 px-3 py-3">
+                <div className="flex items-start gap-3">
+                  <input
+                    id="auth-legal-consent"
+                    type="checkbox"
+                    checked={acceptedLegal}
+                    required={authMode === "sign-up"}
+                    onChange={(event) => {
+                      setAcceptedLegal(event.target.checked);
+                      setAuthError(null);
+                    }}
+                    className="mt-0.5 h-4 w-4 rounded border-gray-300 text-black focus:ring-black"
+                  />
+                  <div className="space-y-1">
+                    <label
+                      htmlFor="auth-legal-consent"
+                      className="block text-sm font-medium text-gray-700"
+                    >
+                      I agree to the Terms of Use and Privacy Policy.
+                    </label>
+                    <p className="text-xs leading-5 text-gray-500">
+                      Review{" "}
+                      <Link
+                        href="/terms-of-use"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-medium text-gray-900 underline underline-offset-4"
+                      >
+                        Terms of Use
+                      </Link>{" "}
+                      and{" "}
+                      <Link
+                        href="/privacy-policy"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-medium text-gray-900 underline underline-offset-4"
+                      >
+                        Privacy Policy
+                      </Link>
+                      .
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {authMessage && (
               <p className="rounded border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-700">

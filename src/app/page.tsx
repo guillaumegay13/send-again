@@ -404,6 +404,28 @@ export default async function LandingPage() {
           color: "var(--text-muted)",
         }}
       >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "center",
+            gap: "1rem",
+            flexWrap: "wrap",
+            marginBottom: "0.5rem",
+          }}
+        >
+          <Link
+            href="/terms-of-use"
+            style={{ color: "var(--text-muted)", textDecoration: "none" }}
+          >
+            Terms of Use
+          </Link>
+          <Link
+            href="/privacy-policy"
+            style={{ color: "var(--text-muted)", textDecoration: "none" }}
+          >
+            Privacy Policy
+          </Link>
+        </div>
         <p style={{ margin: 0 }}>
           &copy; {new Date().getFullYear()} Send Again. All rights reserved.
         </p>

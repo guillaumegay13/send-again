@@ -49,6 +49,17 @@ function buildDefaultFooter({
   ].join("");
 }
 
+function buildSendAgainFooter(): string {
+  const sendAgainUrl = "https://send-again.com";
+  const escapedSendAgainUrl = escapeHtml(sendAgainUrl);
+
+  return [
+    "<p style=\"margin:12px 0 0 0;font-size:12px;line-height:1.5;color:#6b7280;\">",
+    `sent with <a href="${escapedSendAgainUrl}" style="color:#2563eb;">${escapedSendAgainUrl}</a>`,
+    "</p>",
+  ].join("");
+}
+
 export function appendWorkspaceFooter({
   html,
   footerHtml,
@@ -80,5 +91,5 @@ export function appendWorkspaceFooter({
           websiteUrl: normalizedWebsiteUrl,
         });
 
-  return appendFooterToHtml(html, footer);
+  return appendFooterToHtml(html, `${footer}${buildSendAgainFooter()}`);
 }
