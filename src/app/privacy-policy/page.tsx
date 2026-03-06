@@ -24,7 +24,7 @@ const sections: LegalSection[] = [
     title: "2. Data we collect",
     paragraphs: ["The information we collect depends on how you use Send Again."],
     bullets: [
-      "Account data, such as email address, login activity, and authentication metadata.",
+      "Account data, such as email address, login activity, authentication metadata, and account records stored through Supabase authentication and database services.",
       "Workspace data, such as sending domains, from names, footer content, contacts, campaign templates, send history, and unsubscribe records.",
       "Billing and transaction data, such as plan, credits, invoices, payment status, and customer identifiers from payment providers.",
       "Technical and usage data, such as logs, IP address, browser data, API activity, device details, and operational telemetry.",
@@ -53,7 +53,7 @@ const sections: LegalSection[] = [
       "We share personal data only where needed to operate the service, comply with law, or protect legitimate interests.",
     ],
     bullets: [
-      "Infrastructure, hosting, and database providers used to run the application and store operational data.",
+      "Infrastructure, hosting, authentication, and database providers used to run the application and store operational data, including Supabase for account authentication and application data storage.",
       "Email delivery providers, such as Amazon SES, used to send and track messages.",
       "Billing and payment providers used to process purchases and subscription activity.",
       "Professional advisers, legal authorities, or counterparties when required for compliance, dispute resolution, or safety reasons.",
