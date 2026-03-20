@@ -236,22 +236,57 @@ export const openapiSpec = {
         },
       },
       delete: {
-        operationId: "deleteAllContacts",
-        summary: "Delete all contacts in a workspace",
+        operationId: "deleteContacts",
+        summary: "Delete contacts: all, single (via ?email=), or batch (via body)",
         tags: ["Contacts"],
         security: [{ jwt: [] }, { apiKey: [] }],
         parameters: [
           {
             name: "workspace",
             in: "query" as const,
-            required: true,
+            description: "Workspace ID. Can also be provided in the request body.",
             schema: { type: "string" },
           },
+          {
+            name: "email",
+            in: "query" as const,
+            description: "Delete a single contact by email address.",
+            schema: { type: "string", format: "email" },
+          },
         ],
+        requestBody: {
+          required: false,
+          description: "Optional body for batch delete.",
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  workspace: { type: "string" },
+                  emails: {
+                    type: "array",
+                    items: { type: "string", format: "email" },
+                    description: "List of emails to delete. If provided, only these contacts are removed.",
+                  },
+                },
+              },
+            },
+          },
+        },
         responses: {
           "200": {
             description: "Success",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Ok" } } },
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    ok: { type: "boolean", const: true },
+                    deleted: { type: "integer", description: "Number of contacts deleted (batch mode only)." },
+                  },
+                },
+              },
+            },
           },
         },
       },
