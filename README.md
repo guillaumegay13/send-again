@@ -127,7 +127,7 @@ npm run build && npm start
 | `GET` | `/api/send/status?jobId=<id>` | Live job progress |
 | `GET` | `/api/send/jobs?workspace=<id>` | List send jobs |
 | `POST` | `/api/send/process` | Worker endpoint for job processing |
-| `GET/POST` | `/api/contacts` | List or import contacts |
+| `GET/POST/DELETE` | `/api/contacts` | List, import, or explicitly delete contacts |
 | `GET/DELETE` | `/api/contacts/[email]` | Get or delete a contact |
 | `GET/POST/DELETE` | `/api/keys` | Manage API keys |
 

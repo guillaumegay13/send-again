@@ -68,7 +68,7 @@ function buildSystemPrompt(target: VibeTarget): string {
     "Return raw HTML only, with inline styles. Do not return markdown or code fences.",
     "Keep output concise and readable in email clients.",
     "Do not include <html> or <body> tags.",
-    "Do not include a footer or unsubscribe section, that is appended separately.",
+    "Do not include a footer or unsubscribe section; footer content is managed separately in workspace settings.",
   ].join(" ");
 }
 

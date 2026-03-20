@@ -28,34 +28,14 @@ function appendFooterToHtml(html: string, footer: string): string {
   return `${html}${footer}`;
 }
 
-function buildDefaultFooter({
-  unsubscribeUrl,
-  websiteUrl,
-}: {
-  unsubscribeUrl: string;
-  websiteUrl: string;
-}): string {
-  const escapedUnsubscribeUrl = escapeHtml(unsubscribeUrl);
-  const escapedWebsiteUrl = escapeHtml(websiteUrl);
-
-  return [
-    "<hr style=\"margin-top:24px;margin-bottom:16px;border:none;border-top:1px solid #e5e7eb;\" />",
-    "<p style=\"margin:0;font-size:12px;line-height:1.5;color:#6b7280;\">",
-    `Need help? Visit <a href="${escapedWebsiteUrl}" style="color:#2563eb;">our website</a>.`,
-    "</p>",
-    "<p style=\"margin:8px 0 0 0;font-size:12px;line-height:1.5;color:#6b7280;\">",
-    `No longer interested? <a href="${escapedUnsubscribeUrl}" style="color:#2563eb;">Unsubscribe</a>.`,
-    "</p>",
-  ].join("");
-}
-
 function buildSendAgainFooter(): string {
   const sendAgainUrl = "https://send-again.com";
   const escapedSendAgainUrl = escapeHtml(sendAgainUrl);
+  const sendAgainLabel = "send-again.com";
 
   return [
     "<p style=\"margin:12px 0 0 0;font-size:12px;line-height:1.5;color:#6b7280;\">",
-    `sent with <a href="${escapedSendAgainUrl}" style="color:#2563eb;">${escapedSendAgainUrl}</a>`,
+    `sent with <a href="${escapedSendAgainUrl}" style="color:#2563eb;">${sendAgainLabel}</a>`,
     "</p>",
   ].join("");
 }
@@ -79,17 +59,5 @@ export function appendWorkspaceFooter({
     .replace(/\{\{\s*unsubscribe_url\s*\}\}/gi, unsubscribeUrl)
     .replace(/\{\{\s*workspace_url\s*\}\}/gi, normalizedWebsiteUrl);
 
-  const hasUnsubscribePlaceholder =
-    /\{\{\s*unsubscribe_url\s*\}\}/i.test(customFooter);
-  const unsubscribeFallback = `<p style="margin:8px 0 0 0;font-size:12px;line-height:1.5;color:#6b7280;">No longer interested? <a href="${escapeHtml(unsubscribeUrl)}" style="color:#2563eb;">Unsubscribe</a>.</p>`;
-
-  const footer =
-    renderedCustomFooter.length > 0
-      ? `${renderedCustomFooter}${hasUnsubscribePlaceholder ? "" : unsubscribeFallback}`
-      : buildDefaultFooter({
-          unsubscribeUrl,
-          websiteUrl: normalizedWebsiteUrl,
-        });
-
-  return appendFooterToHtml(html, `${footer}${buildSendAgainFooter()}`);
+  return appendFooterToHtml(html, `${renderedCustomFooter}${buildSendAgainFooter()}`);
 }

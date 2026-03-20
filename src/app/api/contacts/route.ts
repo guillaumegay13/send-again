@@ -71,8 +71,24 @@ export async function DELETE(req: NextRequest) {
     const email = req.nextUrl.searchParams.get("email");
 
     const body = await req.text();
-    const parsed = body ? JSON.parse(body) : {};
-    const emails = parsed.emails as string[] | undefined;
+    let parsed: {
+      workspace?: string;
+      emails?: unknown;
+      confirmDeleteAll?: unknown;
+    } = {};
+    if (body) {
+      try {
+        parsed = JSON.parse(body) as typeof parsed;
+      } catch {
+        return NextResponse.json(
+          { error: "Invalid JSON body" },
+          { status: 400 }
+        );
+      }
+    }
+
+    const emails = parsed.emails;
+    const confirmDeleteAll = parsed.confirmDeleteAll === true;
 
     const { workspace } = await requireWorkspaceAuth(
       req,
@@ -80,15 +96,41 @@ export async function DELETE(req: NextRequest) {
       "contacts.write"
     );
 
-    if (emails && Array.isArray(emails)) {
-      await Promise.all(emails.map((e) => deleteContact(workspace, e)));
-      return NextResponse.json({ ok: true, deleted: emails.length });
-    } else if (email) {
-      await deleteContact(workspace, email);
-    } else {
-      await deleteAllContacts(workspace);
+    if (Array.isArray(emails)) {
+      const normalizedEmails = emails
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => value.trim())
+        .filter(Boolean);
+      if (normalizedEmails.length !== emails.length) {
+        return NextResponse.json(
+          { error: "emails[] must contain only non-empty strings" },
+          { status: 400 }
+        );
+      }
+
+      await Promise.all(normalizedEmails.map((value) => deleteContact(workspace, value)));
+      return NextResponse.json({ ok: true, deleted: normalizedEmails.length });
     }
-    return NextResponse.json({ ok: true });
+
+    const normalizedEmail = email?.trim();
+    if (normalizedEmail) {
+      await deleteContact(workspace, normalizedEmail);
+      return NextResponse.json({ ok: true });
+    }
+
+    // Fail closed: full workspace purges require an explicit confirmation flag.
+    if (confirmDeleteAll) {
+      await deleteAllContacts(workspace);
+      return NextResponse.json({ ok: true });
+    }
+
+    return NextResponse.json(
+      {
+        error:
+          "Explicit delete target required. Use ?email=, body.emails[], or body.confirmDeleteAll=true.",
+      },
+      { status: 400 }
+    );
   } catch (error) {
     return apiErrorResponse(error);
   }

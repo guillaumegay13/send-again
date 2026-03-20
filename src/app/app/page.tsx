@@ -2698,13 +2698,26 @@ export default function ComposePage() {
   }
 
   async function clearContacts() {
-    if (!sessionToken || !activeId) return;
-    setLocalContacts([]);
+    if (!sessionToken || !activeId || contacts.length === 0) return;
+    const workspaceLabel = workspace?.name ?? activeId;
+    const confirmed = window.confirm(
+      `Delete all ${contacts.length} contacts from ${workspaceLabel}? This cannot be undone.`
+    );
+    if (!confirmed) return;
+
     try {
       await fetchJson<{ ok: boolean }>(
-        `/api/contacts?workspace=${encodeURIComponent(activeId)}`,
-        { method: "DELETE" }
+        "/api/contacts",
+        {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            workspace: activeId,
+            confirmDeleteAll: true,
+          }),
+        }
       );
+      setLocalContacts([]);
     } catch (e) {
       console.error("Failed to clear contacts:", e);
     }
@@ -3910,7 +3923,11 @@ export default function ComposePage() {
                   ))}
                 </span>
                 <span className="text-xs text-gray-400">
-                  Workspace footer + unsubscribe link are appended automatically.
+                  Workspace footer is appended automatically. Add{" "}
+                  <code className="bg-gray-100 px-1 rounded">
+                    {"{{unsubscribe_url}}"}
+                  </code>{" "}
+                  to your footer if you want an unsubscribe link there.
                 </span>
               </label>
 
@@ -5386,7 +5403,7 @@ export default function ComposePage() {
                       value={footerVibePrompt}
                       onChange={(e) => setFooterVibePrompt(e.target.value)}
                       rows={3}
-                      placeholder="Create a clean minimal footer with brand tone, website link and unsubscribe."
+                      placeholder="Create a clean minimal footer with brand tone and the links I need."
                       className="mt-2 w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black resize-y"
                     />
                     <div className="mt-2 flex items-center gap-3">

@@ -237,7 +237,8 @@ export const openapiSpec = {
       },
       delete: {
         operationId: "deleteContacts",
-        summary: "Delete contacts: all, single (via ?email=), or batch (via body)",
+        summary:
+          "Delete contacts: single via ?email=, batch via body.emails, or all via explicit confirmDeleteAll",
         tags: ["Contacts"],
         security: [{ jwt: [] }, { apiKey: [] }],
         parameters: [
@@ -268,6 +269,11 @@ export const openapiSpec = {
                     items: { type: "string", format: "email" },
                     description: "List of emails to delete. If provided, only these contacts are removed.",
                   },
+                  confirmDeleteAll: {
+                    type: "boolean",
+                    description:
+                      "Must be true to delete every contact in the workspace when no email selectors are provided.",
+                  },
                 },
               },
             },
@@ -287,6 +293,11 @@ export const openapiSpec = {
                 },
               },
             },
+          },
+          "400": {
+            description:
+              "Missing explicit delete target, invalid JSON body, or invalid emails[] payload.",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
           },
         },
       },
