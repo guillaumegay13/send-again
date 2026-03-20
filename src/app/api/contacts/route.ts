@@ -4,6 +4,7 @@ import {
   getContacts,
   upsertContacts,
   deleteAllContacts,
+  deleteContact,
 } from "@/lib/db";
 import { apiErrorResponse, requireWorkspaceAuth } from "@/lib/auth";
 
@@ -67,13 +68,26 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   try {
     const workspaceParam = req.nextUrl.searchParams.get("workspace");
+    const email = req.nextUrl.searchParams.get("email");
+
+    const body = await req.text();
+    const parsed = body ? JSON.parse(body) : {};
+    const emails = parsed.emails as string[] | undefined;
+
     const { workspace } = await requireWorkspaceAuth(
       req,
-      workspaceParam,
+      workspaceParam ?? parsed.workspace,
       "contacts.write"
     );
 
-    await deleteAllContacts(workspace);
+    if (emails && Array.isArray(emails)) {
+      await Promise.all(emails.map((e) => deleteContact(workspace, e)));
+      return NextResponse.json({ ok: true, deleted: emails.length });
+    } else if (email) {
+      await deleteContact(workspace, email);
+    } else {
+      await deleteAllContacts(workspace);
+    }
     return NextResponse.json({ ok: true });
   } catch (error) {
     return apiErrorResponse(error);
