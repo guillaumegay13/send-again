@@ -158,7 +158,7 @@ function buildRawMessage({
   // Encode subject for UTF-8 support
   const encodedSubject = `=?UTF-8?B?${Buffer.from(subject).toString("base64")}?=`;
 
-  let headers = [
+  const headers = [
     `From: ${from}`,
     `To: ${to}`,
     `Subject: ${encodedSubject}`,

@@ -8,7 +8,6 @@ import {
   getUnsubscribedEmailSet,
   insertSendJobRecipients,
 } from "@/lib/db";
-import { processSendJobs } from "@/lib/send-job-processor";
 import { apiErrorResponse, requireWorkspaceAuth } from "@/lib/auth";
 import {
   getInitialFreeCredits,
@@ -17,6 +16,8 @@ import {
   isBillingEnforced,
 } from "@/lib/billing";
 import { getSesConfigurationSetName } from "@/lib/ses-config";
+import { enqueueScheduledTask } from "@/lib/task-queue";
+import { drainBackgroundWork } from "@/lib/background-processors";
 
 interface SendBody {
   workspaceId: string;
@@ -31,6 +32,7 @@ interface SendBody {
   rateLimit: number;
   footerHtml: string;
   websiteUrl: string;
+  sendAt: string | null;
 }
 
 type RecipientMode =
@@ -96,6 +98,20 @@ function uniqueEmails(values: string[]): string[] {
   return unique;
 }
 
+function parseSendAt(value: string | null): string | null {
+  const normalized = value?.trim();
+  if (!normalized) {
+    return null;
+  }
+
+  const parsed = Date.parse(normalized);
+  if (!Number.isFinite(parsed)) {
+    throw new Error("Invalid sendAt value");
+  }
+
+  return new Date(parsed).toISOString();
+}
+
 function normalizeSendRequestBody(raw: unknown): SendBody {
   const body = (raw ?? {}) as Record<string, unknown>;
 
@@ -106,6 +122,8 @@ function normalizeSendRequestBody(raw: unknown): SendBody {
   const html = String(body.html ?? "").trim();
   const footerHtml = String(body.footerHtml ?? "");
   const websiteUrl = String(body.websiteUrl ?? "");
+  const sendAt =
+    typeof body.sendAt === "string" ? body.sendAt.trim() || null : null;
   const rateLimit = normalizeRateLimit(body.rateLimit);
   const configSet = getSesConfigurationSetName();
   const recipientMode = normalizeRecipientMode(body.recipientMode);
@@ -127,12 +145,32 @@ function normalizeSendRequestBody(raw: unknown): SendBody {
     rateLimit,
     footerHtml,
     websiteUrl,
+    sendAt,
   };
 }
 
 export async function POST(req: NextRequest) {
   try {
     const body = normalizeSendRequestBody(await req.json());
+    let scheduledFor: string | null = null;
+    try {
+      scheduledFor = parseSendAt(body.sendAt);
+    } catch (error) {
+      return NextResponse.json(
+        {
+          error:
+            error instanceof Error ? error.message : "Invalid sendAt value",
+        },
+        { status: 400 }
+      );
+    }
+    if (scheduledFor && Date.parse(scheduledFor) <= Date.now()) {
+      return NextResponse.json(
+        { error: "sendAt must be in the future" },
+        { status: 400 }
+      );
+    }
+
     const auth = await requireWorkspaceAuth(
       req,
       body.workspaceId || null,
@@ -320,6 +358,8 @@ export async function POST(req: NextRequest) {
       ),
       sendConcurrency: normalizeConcurrency(process.env.SEND_JOB_CONCURRENCY ?? 4),
       dryRun: false,
+      initialStatus: scheduledFor ? "scheduled" : "queued",
+      scheduledFor,
     });
 
     try {
@@ -334,6 +374,27 @@ export async function POST(req: NextRequest) {
       throw error;
     }
 
+    if (scheduledFor) {
+      try {
+        await enqueueScheduledTask({
+          kind: "send_job_dispatch",
+          workspaceId,
+          dueAt: scheduledFor,
+          payload: { sendJobId: jobId },
+          idempotencyKey: `send-job-dispatch:${jobId}`,
+          maxAttempts: 8,
+        });
+      } catch (error) {
+        await failSendJobWithMessage(
+          jobId,
+          "Failed to schedule send job dispatch"
+        ).catch(() => {
+          // no-op
+        });
+        throw error;
+      }
+    }
+
     // Continue processing after the HTTP response lifecycle (Vercel/Next.js supported).
     after(async () => {
       try {
@@ -342,21 +403,17 @@ export async function POST(req: NextRequest) {
           20,
           1
         );
-        for (let i = 0; i < maxIterations; i += 1) {
-          const summary = await processSendJobs();
-          if (summary.recipientsProcessed <= 0) {
-            break;
-          }
-        }
+        await drainBackgroundWork(maxIterations);
       } catch (err) {
-        console.error("Background processSendJobs error:", err);
+        console.error("Background processing error:", err);
       }
     });
 
     return NextResponse.json({
       jobId,
-      status: "queued",
+      status: scheduledFor ? "scheduled" : "queued",
       total: recipients.length,
+      scheduledFor,
       skippedUnsubscribed: unsubscribed.size,
       dryRun: false,
       billing: billingSummary,

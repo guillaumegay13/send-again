@@ -15,7 +15,7 @@ import { getBrowserSupabaseClient } from "@/lib/supabase-browser";
 import { appendWorkspaceFooter } from "@/lib/email-footer";
 import { FancySelect } from "@/components/ui/fancy-select";
 import { AppSidebar } from "@/components/ui/app-sidebar";
-import { CampaignsShell } from "../campaigns/page";
+import { CampaignsShell } from "@/components/campaigns-shell";
 
 type Tab = "compose" | "contacts" | "history" | "settings" | "campaigns";
 type HistoryView = "activity" | "performance";
@@ -146,7 +146,13 @@ const API_KEY_SCOPE_OPTIONS: Array<{ value: ApiKeyScope; label: string }> = [
 interface SendJobStatusResponse {
   id: string;
   workspaceId: string;
-  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  status:
+    | "scheduled"
+    | "queued"
+    | "running"
+    | "completed"
+    | "failed"
+    | "cancelled";
   total: number;
   sent: number;
   failed: number;
@@ -155,6 +161,7 @@ interface SendJobStatusResponse {
   batchSize: number;
   sendConcurrency: number;
   createdAt: string;
+  scheduledFor: string | null;
   startedAt: string | null;
   completedAt: string | null;
   heartbeatAt: string | null;
@@ -170,10 +177,17 @@ interface SendJobStatusResponse {
 interface SendJobSummary {
   id: string;
   workspaceId: string;
-  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  status:
+    | "scheduled"
+    | "queued"
+    | "running"
+    | "completed"
+    | "failed"
+    | "cancelled";
   total: number;
   sent: number;
   failed: number;
+  scheduledFor?: string | null;
 }
 
 type ApiKeyScope =
@@ -1934,7 +1948,7 @@ export default function ComposePage() {
     fetchJson<{ jobs: SendJobSummary[] }>(
       `/api/send/jobs?workspace=${encodeURIComponent(
         activeId
-      )}&status=queued,running&limit=1`
+      )}&status=scheduled,queued,running&limit=1`
     )
       .then((data) => {
         if (cancelled) return;
@@ -5659,7 +5673,11 @@ export default function ComposePage() {
 
         {tab === "campaigns" && (
           <div className="flex-1 min-w-0 overflow-y-auto bg-gray-100 text-gray-900">
-            <CampaignsShell embedded />
+            <CampaignsShell
+              key={activeId ?? "no-workspace"}
+              embedded
+              workspaceId={activeId}
+            />
           </div>
         )}
       </div>

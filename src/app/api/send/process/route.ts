@@ -1,23 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { processSendJobs } from "@/lib/send-job-processor";
+import { isProcessorAuthorized } from "@/lib/processor-auth";
 
-function isAuthorized(req: NextRequest): boolean {
-  const token = process.env.SEND_JOB_PROCESSOR_TOKEN;
-  if (!token) return true;
+export const dynamic = "force-dynamic";
 
-  const header = req.headers.get("x-send-job-token");
-  const authHeader = req.headers.get("authorization");
-
-  const provided =
-    header?.trim() ??
-    authHeader?.replace(/^Bearer\s+/i, "")?.trim() ??
-    null;
-
-  return provided === token;
-}
-
-export async function POST(req: NextRequest) {
-  if (!isAuthorized(req)) {
+async function handleProcess(req: NextRequest) {
+  if (!isProcessorAuthorized(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -34,6 +22,13 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     console.error(error);
-    return NextResponse.json({ ok: false, error: "Failed to process send jobs" }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: "Failed to process send jobs" },
+      { status: 500 }
+    );
   }
+}
+
+export async function POST(req: NextRequest) {
+  return handleProcess(req);
 }

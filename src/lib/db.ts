@@ -19,7 +19,7 @@ function requireEnv(name: string, value: string | undefined): string {
   return value;
 }
 
-function getDb(): SupabaseClient {
+export function getDb(): SupabaseClient {
   if (!globalDb.__supabaseDb) {
     const supabaseUrl = requireEnv(
       "SUPABASE_URL or NEXT_PUBLIC_SUPABASE_URL",
@@ -507,6 +507,14 @@ export async function deleteWorkspaceData(workspaceId: string): Promise<void> {
     assertNoError(error, "Failed to delete workspace email events");
   }
 
+  const { error: contactEventsError } = await db
+    .from("contact_events")
+    .delete()
+    .eq("workspace_id", workspaceId);
+  if (!isMissingTableError(contactEventsError, "contact_events")) {
+    assertNoError(contactEventsError, "Failed to delete workspace contact events");
+  }
+
   const { error: sendsError } = await db
     .from("sends")
     .delete()
@@ -515,12 +523,89 @@ export async function deleteWorkspaceData(workspaceId: string): Promise<void> {
     assertNoError(sendsError, "Failed to delete workspace sends");
   }
 
+  const { error: scheduledTasksError } = await db
+    .from("scheduled_tasks")
+    .delete()
+    .eq("workspace_id", workspaceId);
+  if (!isMissingTableError(scheduledTasksError, "scheduled_tasks")) {
+    assertNoError(
+      scheduledTasksError,
+      "Failed to delete workspace scheduled tasks"
+    );
+  }
+
   const { error: sendJobsError } = await db
     .from("send_jobs")
     .delete()
     .eq("workspace_id", workspaceId);
   if (!isMissingTableError(sendJobsError, "send_jobs")) {
     assertNoError(sendJobsError, "Failed to delete workspace send jobs");
+  }
+
+  const campaignRunIds: string[] = [];
+  let campaignRunsFrom = 0;
+
+  while (true) {
+    const { data: campaignRunRows, error: campaignRunListError } = await db
+      .from("campaign_runs")
+      .select("id")
+      .eq("workspace_id", workspaceId)
+      .order("id", { ascending: true })
+      .range(campaignRunsFrom, campaignRunsFrom + pageSize - 1);
+    if (isMissingTableError(campaignRunListError, "campaign_runs")) {
+      break;
+    }
+    assertNoError(campaignRunListError, "Failed to list workspace campaign runs");
+
+    const rows = (campaignRunRows ?? []) as Array<{ id: string }>;
+    if (rows.length === 0) {
+      break;
+    }
+
+    for (const row of rows) {
+      const campaignRunId = String(row.id ?? "").trim();
+      if (campaignRunId) {
+        campaignRunIds.push(campaignRunId);
+      }
+    }
+
+    campaignRunsFrom += rows.length;
+    if (rows.length < pageSize) {
+      break;
+    }
+  }
+
+  for (const chunk of chunkArray(campaignRunIds, 1000)) {
+    if (chunk.length === 0) continue;
+    const { error: campaignRunStepsError } = await db
+      .from("campaign_run_steps")
+      .delete()
+      .in("run_id", chunk);
+    if (!isMissingTableError(campaignRunStepsError, "campaign_run_steps")) {
+      assertNoError(
+        campaignRunStepsError,
+        "Failed to delete workspace campaign run steps"
+      );
+    }
+  }
+
+  const { error: campaignRunsError } = await db
+    .from("campaign_runs")
+    .delete()
+    .eq("workspace_id", workspaceId);
+  if (!isMissingTableError(campaignRunsError, "campaign_runs")) {
+    assertNoError(campaignRunsError, "Failed to delete workspace campaign runs");
+  }
+
+  const { error: campaignWorkflowsError } = await db
+    .from("campaign_workflows")
+    .delete()
+    .eq("workspace_id", workspaceId);
+  if (!isMissingTableError(campaignWorkflowsError, "campaign_workflows")) {
+    assertNoError(
+      campaignWorkflowsError,
+      "Failed to delete workspace campaign workflows"
+    );
   }
 
   const { error: contactsError } = await db
@@ -1285,6 +1370,343 @@ export async function insertEvent(
   assertNoError(error, "Failed to insert event");
 }
 
+export interface SentMessageTracking {
+  workspaceId: string;
+  messageId: string;
+  recipient: string;
+  subject: string;
+  sentAt: string;
+  sendJobId: string | null;
+  campaignId: string | null;
+  campaignRunId: string | null;
+  campaignStepId: string | null;
+}
+
+export interface ContactEvent {
+  id: string;
+  workspaceId: string;
+  contactEmail: string;
+  eventType: string;
+  eventValue: string | null;
+  messageId: string | null;
+  sendJobId: string | null;
+  campaignId: string | null;
+  campaignRunId: string | null;
+  campaignStepId: string | null;
+  source: string;
+  sourceRef: string | null;
+  detail: string | null;
+  metadata: Record<string, unknown>;
+  occurredAt: string;
+  createdAt: string;
+  idempotencyKey: string | null;
+}
+
+interface ContactEventRowRaw {
+  id: unknown;
+  workspace_id: unknown;
+  contact_email: unknown;
+  event_type: unknown;
+  event_value: unknown;
+  message_id: unknown;
+  send_job_id: unknown;
+  campaign_id: unknown;
+  campaign_run_id: unknown;
+  campaign_step_id: unknown;
+  source: unknown;
+  source_ref: unknown;
+  detail: unknown;
+  metadata: unknown;
+  occurred_at: unknown;
+  created_at: unknown;
+  idempotency_key: unknown;
+}
+
+const CONTACT_EVENT_SELECT =
+  "id, workspace_id, contact_email, event_type, event_value, message_id, send_job_id, campaign_id, campaign_run_id, campaign_step_id, source, source_ref, detail, metadata, occurred_at, created_at, idempotency_key";
+
+function assertContactEventsTable(error: { message: string } | null): void {
+  const missingRelation = getMissingRelation(error);
+  if (missingRelation === "contact_events") {
+    throw new Error(
+      "Database schema missing `contact_events` table. Run the latest supabase/schema.sql."
+    );
+  }
+}
+
+function normalizeContactEventType(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s/]+/g, "_")
+    .slice(0, 64);
+}
+
+function normalizeNullableText(
+  value: unknown,
+  maxLength: number
+): string | null {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  return text.slice(0, maxLength);
+}
+
+function normalizeContactEventMetadata(
+  value: unknown
+): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return value as Record<string, unknown>;
+}
+
+function normalizeContactEventRow(row: ContactEventRowRaw): ContactEvent {
+  return {
+    id: String(row.id ?? ""),
+    workspaceId: String(row.workspace_id ?? "").trim().toLowerCase(),
+    contactEmail: String(row.contact_email ?? "").trim().toLowerCase(),
+    eventType: normalizeContactEventType(row.event_type),
+    eventValue: normalizeNullableText(row.event_value, 128),
+    messageId: normalizeNullableText(row.message_id, 255),
+    sendJobId: normalizeNullableText(row.send_job_id, 64),
+    campaignId: normalizeNullableText(row.campaign_id, 64),
+    campaignRunId: normalizeNullableText(row.campaign_run_id, 64),
+    campaignStepId: normalizeNullableText(row.campaign_step_id, 64),
+    source: String(row.source ?? "").trim().toLowerCase(),
+    sourceRef: normalizeNullableText(row.source_ref, 255),
+    detail: normalizeNullableText(row.detail, 2000),
+    metadata: normalizeContactEventMetadata(row.metadata),
+    occurredAt: String(row.occurred_at ?? ""),
+    createdAt: String(row.created_at ?? ""),
+    idempotencyKey: normalizeNullableText(row.idempotency_key, 255),
+  };
+}
+
+export async function getSentMessageTracking(
+  workspaceId: string,
+  messageId: string
+): Promise<SentMessageTracking | null> {
+  const db = getDb();
+  const normalizedWorkspaceId = workspaceId.trim().toLowerCase();
+  const normalizedMessageId = messageId.trim();
+  if (!normalizedWorkspaceId || !normalizedMessageId) {
+    return null;
+  }
+
+  const { data: sendData, error: sendError } = await db
+    .from("sends")
+    .select("workspace_id, message_id, recipient, subject, sent_at")
+    .eq("workspace_id", normalizedWorkspaceId)
+    .eq("message_id", normalizedMessageId)
+    .limit(1);
+  assertNoError(sendError, "Failed to read sent message");
+
+  const sendRow = (sendData ?? [])[0] as
+    | {
+        workspace_id: string;
+        message_id: string;
+        recipient: string;
+        subject: string;
+        sent_at: string;
+      }
+    | undefined;
+  if (!sendRow) {
+    return null;
+  }
+
+  const { data: recipientData, error: recipientError } = await db
+    .from("send_job_recipients")
+    .select("job_id")
+    .eq("message_id", normalizedMessageId)
+    .limit(1);
+  assertNoError(recipientError, "Failed to resolve send job for message");
+
+  const sendJobId = normalizeNullableText(
+    (recipientData ?? [])[0]?.job_id ?? null,
+    64
+  );
+
+  let campaignId: string | null = null;
+  let campaignRunId: string | null = null;
+  let campaignStepId: string | null = null;
+
+  if (sendJobId) {
+    const { data: sendJobData, error: sendJobError } = await db
+      .from("send_jobs")
+      .select("campaign_id, campaign_run_id, campaign_step_id")
+      .eq("id", sendJobId)
+      .limit(1);
+    assertNoError(sendJobError, "Failed to read send job for message");
+
+    const sendJobRow = (sendJobData ?? [])[0] as
+      | {
+          campaign_id: string | null;
+          campaign_run_id: string | null;
+          campaign_step_id: string | null;
+        }
+      | undefined;
+
+    campaignId = normalizeNullableText(sendJobRow?.campaign_id ?? null, 64);
+    campaignRunId = normalizeNullableText(
+      sendJobRow?.campaign_run_id ?? null,
+      64
+    );
+    campaignStepId = normalizeNullableText(
+      sendJobRow?.campaign_step_id ?? null,
+      64
+    );
+  }
+
+  return {
+    workspaceId: String(sendRow.workspace_id ?? "").trim().toLowerCase(),
+    messageId: String(sendRow.message_id ?? "").trim(),
+    recipient: String(sendRow.recipient ?? "").trim().toLowerCase(),
+    subject: String(sendRow.subject ?? ""),
+    sentAt: String(sendRow.sent_at ?? ""),
+    sendJobId,
+    campaignId,
+    campaignRunId,
+    campaignStepId,
+  };
+}
+
+export async function createContactEvent(params: {
+  workspaceId: string;
+  contactEmail?: string | null;
+  eventType: string;
+  eventValue?: string | null;
+  messageId?: string | null;
+  source?: string | null;
+  sourceRef?: string | null;
+  detail?: string | null;
+  metadata?: Record<string, unknown> | null;
+  occurredAt?: string | null;
+  idempotencyKey?: string | null;
+}): Promise<ContactEvent> {
+  const db = getDb();
+  const workspaceId = params.workspaceId.trim().toLowerCase();
+  const eventType = normalizeContactEventType(params.eventType);
+  const contactEmail = String(params.contactEmail ?? "").trim().toLowerCase();
+  const messageId = normalizeNullableText(params.messageId, 255);
+  const source = normalizeNullableText(params.source, 64) ?? "api";
+  const sourceRef = normalizeNullableText(params.sourceRef, 255);
+  const detail = normalizeNullableText(params.detail, 2000);
+  const eventValue = normalizeNullableText(params.eventValue, 128);
+  const idempotencyKey = normalizeNullableText(params.idempotencyKey, 255);
+  const metadata = normalizeContactEventMetadata(params.metadata);
+  const occurredAt = params.occurredAt?.trim() || new Date().toISOString();
+
+  if (!workspaceId) {
+    throw new Error("workspaceId is required");
+  }
+  if (!eventType) {
+    throw new Error("eventType is required");
+  }
+  if (Number.isNaN(Date.parse(occurredAt))) {
+    throw new Error("occurredAt must be a valid ISO timestamp");
+  }
+
+  let tracking: SentMessageTracking | null = null;
+  if (messageId) {
+    tracking = await getSentMessageTracking(workspaceId, messageId);
+    if (!tracking) {
+      throw new Error("Sent message not found");
+    }
+  }
+
+  const resolvedContactEmail = tracking?.recipient ?? contactEmail;
+  if (!resolvedContactEmail) {
+    throw new Error("contactEmail is required when messageId is not provided");
+  }
+  if (tracking && contactEmail && contactEmail !== tracking.recipient) {
+    throw new Error("contactEmail does not match the sent message recipient");
+  }
+
+  if (idempotencyKey) {
+    const { data: existingData, error: existingError } = await db
+      .from("contact_events")
+      .select(CONTACT_EVENT_SELECT)
+      .eq("workspace_id", workspaceId)
+      .eq("idempotency_key", idempotencyKey)
+      .limit(1);
+    assertContactEventsTable(existingError);
+    assertNoError(existingError, "Failed to read contact event");
+    const existingRow = (existingData ?? [])[0] as ContactEventRowRaw | undefined;
+    if (existingRow) {
+      return normalizeContactEventRow(existingRow);
+    }
+  }
+
+  const now = new Date().toISOString();
+  const { data, error } = await db
+    .from("contact_events")
+    .insert({
+      id: crypto.randomUUID(),
+      workspace_id: workspaceId,
+      contact_email: resolvedContactEmail,
+      event_type: eventType,
+      event_value: eventValue,
+      message_id: tracking?.messageId ?? messageId,
+      send_job_id: tracking?.sendJobId ?? null,
+      campaign_id: tracking?.campaignId ?? null,
+      campaign_run_id: tracking?.campaignRunId ?? null,
+      campaign_step_id: tracking?.campaignStepId ?? null,
+      source,
+      source_ref: sourceRef,
+      detail,
+      metadata,
+      occurred_at: occurredAt,
+      created_at: now,
+      idempotency_key: idempotencyKey,
+    })
+    .select(CONTACT_EVENT_SELECT)
+    .limit(1);
+  assertContactEventsTable(error);
+  assertNoError(error, "Failed to create contact event");
+  const row = (data ?? [])[0] as ContactEventRowRaw | undefined;
+  if (!row) {
+    throw new Error("Failed to read contact event");
+  }
+  return normalizeContactEventRow(row);
+}
+
+export async function listContactEvents(params: {
+  workspaceId: string;
+  contactEmail?: string | null;
+  messageId?: string | null;
+  eventType?: string | null;
+  limit?: number;
+}): Promise<ContactEvent[]> {
+  const db = getDb();
+  const workspaceId = params.workspaceId.trim().toLowerCase();
+  const contactEmail = String(params.contactEmail ?? "").trim().toLowerCase();
+  const messageId = normalizeNullableText(params.messageId, 255);
+  const eventType = normalizeNullableText(params.eventType, 64);
+
+  let query = db
+    .from("contact_events")
+    .select(CONTACT_EVENT_SELECT)
+    .eq("workspace_id", workspaceId)
+    .order("occurred_at", { ascending: false })
+    .order("created_at", { ascending: false })
+    .limit(Math.max(1, Math.floor(params.limit ?? 50)));
+
+  if (contactEmail) {
+    query = query.eq("contact_email", contactEmail);
+  }
+  if (messageId) {
+    query = query.eq("message_id", messageId);
+  }
+  if (eventType) {
+    query = query.eq("event_type", normalizeContactEventType(eventType));
+  }
+
+  const { data, error } = await query;
+  assertContactEventsTable(error);
+  assertNoError(error, "Failed to read contact events");
+  return ((data ?? []) as ContactEventRowRaw[]).map(normalizeContactEventRow);
+}
+
 export interface SendHistoryRow {
   message_id: string;
   recipient: string;
@@ -1925,6 +2347,7 @@ export async function getCampaignPerformanceAnalytics(
 }
 
 export type SendJobStatus =
+  | "scheduled"
   | "queued"
   | "running"
   | "completed"
@@ -1963,6 +2386,7 @@ export interface SendJobProgress {
   batchSize: number;
   sendConcurrency: number;
   createdAt: string;
+  scheduledFor: string | null;
   startedAt: string | null;
   completedAt: string | null;
   heartbeatAt: string | null;
@@ -1982,6 +2406,7 @@ export interface SendJobSummary {
   failed: number;
   dryRun: boolean;
   createdAt: string;
+  scheduledFor: string | null;
   startedAt: string | null;
   completedAt: string | null;
   heartbeatAt: string | null;
@@ -2005,6 +2430,7 @@ interface SendJobRowRaw {
   send_concurrency: number;
   error_message: string | null;
   created_at: string;
+  scheduled_for: string | null;
   started_at: string | null;
   completed_at: string | null;
   heartbeat_at: string | null;
@@ -2074,6 +2500,7 @@ function normalizeSendJobPayload(value: unknown): SendJobPayload {
 }
 
 function normalizeSendJobStatus(value: string): SendJobStatus {
+  if (value === "scheduled") return "scheduled";
   if (value === "queued") return "queued";
   if (value === "running") return "running";
   if (value === "completed") return "completed";
@@ -2094,6 +2521,7 @@ function normalizeSendJobRow(row: SendJobRowRaw): SendJobPayload & {
   batchSize: number;
   sendConcurrency: number;
   createdAt: string;
+  scheduledFor: string | null;
   startedAt: string | null;
   completedAt: string | null;
   heartbeatAt: string | null;
@@ -2123,6 +2551,7 @@ function normalizeSendJobRow(row: SendJobRowRaw): SendJobPayload & {
     batchSize: normalizeNonNegativeInteger(row.batch_size, 50, 1),
     sendConcurrency: normalizeNonNegativeInteger(row.send_concurrency, 1, 1),
     createdAt: row.created_at,
+    scheduledFor: row.scheduled_for ?? null,
     startedAt: row.started_at,
     completedAt: row.completed_at,
     heartbeatAt: row.heartbeat_at,
@@ -2139,6 +2568,11 @@ export async function createSendJob(params: {
   batchSize: number;
   sendConcurrency: number;
   dryRun: boolean;
+  campaignId?: string | null;
+  campaignRunId?: string | null;
+  campaignStepId?: string | null;
+  initialStatus?: "scheduled" | "queued";
+  scheduledFor?: string | null;
 }): Promise<string> {
   const db = getDb();
   const id = crypto.randomUUID();
@@ -2161,12 +2595,16 @@ export async function createSendJob(params: {
     id,
     workspace_id: params.payload.workspaceId,
     user_id: params.userId,
-    status: "queued",
+    status: params.initialStatus ?? "queued",
     total: normalizeNonNegativeInteger(params.totalRecipients, 0),
     sent: 0,
     failed: 0,
     dry_run: params.dryRun,
     payload,
+    scheduled_for: params.scheduledFor ?? null,
+    campaign_id: params.campaignId ?? null,
+    campaign_run_id: params.campaignRunId ?? null,
+    campaign_step_id: params.campaignStepId ?? null,
     rate_limit: normalizeNonNegativeInteger(
       params.rateLimit ?? params.payload.rateLimit,
       params.payload.rateLimit
@@ -2244,7 +2682,7 @@ export async function getSendJobForUser(
   const { data, error } = await db
     .from("send_jobs")
     .select(
-      "id, user_id, workspace_id, status, total, sent, failed, dry_run, payload, rate_limit, batch_size, send_concurrency, error_message, created_at, started_at, completed_at, heartbeat_at, updated_at"
+      "id, user_id, workspace_id, status, total, sent, failed, dry_run, payload, rate_limit, batch_size, send_concurrency, error_message, created_at, scheduled_for, started_at, completed_at, heartbeat_at, updated_at"
     )
     .eq("id", jobId)
     .eq("user_id", userId)
@@ -2265,7 +2703,7 @@ export async function getSendJobForWorkspace(
   const { data, error } = await db
     .from("send_jobs")
     .select(
-      "id, user_id, workspace_id, status, total, sent, failed, dry_run, payload, rate_limit, batch_size, send_concurrency, error_message, created_at, started_at, completed_at, heartbeat_at, updated_at"
+      "id, user_id, workspace_id, status, total, sent, failed, dry_run, payload, rate_limit, batch_size, send_concurrency, error_message, created_at, scheduled_for, started_at, completed_at, heartbeat_at, updated_at"
     )
     .eq("id", jobId)
     .eq("workspace_id", workspaceId)
@@ -2292,7 +2730,7 @@ export async function getSendJobsForUser(
   const query = db
     .from("send_jobs")
     .select(
-      "id, workspace_id, user_id, status, total, sent, failed, dry_run, payload, rate_limit, batch_size, send_concurrency, error_message, created_at, started_at, completed_at, heartbeat_at, updated_at"
+      "id, workspace_id, user_id, status, total, sent, failed, dry_run, payload, rate_limit, batch_size, send_concurrency, error_message, created_at, scheduled_for, started_at, completed_at, heartbeat_at, updated_at"
     )
     .eq("user_id", userId)
     .order("created_at", { ascending: false });
@@ -2322,7 +2760,7 @@ export async function getSendJobsForWorkspace(
   const query = db
     .from("send_jobs")
     .select(
-      "id, workspace_id, user_id, status, total, sent, failed, dry_run, payload, rate_limit, batch_size, send_concurrency, error_message, created_at, started_at, completed_at, heartbeat_at, updated_at"
+      "id, workspace_id, user_id, status, total, sent, failed, dry_run, payload, rate_limit, batch_size, send_concurrency, error_message, created_at, scheduled_for, started_at, completed_at, heartbeat_at, updated_at"
     )
     .eq("workspace_id", workspaceId)
     .order("created_at", { ascending: false });
@@ -2347,7 +2785,7 @@ export async function getQueuedOrRunningSendJobs(
   const { data, error } = await db
     .from("send_jobs")
     .select(
-      "id, workspace_id, user_id, status, total, sent, failed, dry_run, payload, rate_limit, batch_size, send_concurrency, error_message, created_at, started_at, completed_at, heartbeat_at, updated_at"
+      "id, workspace_id, user_id, status, total, sent, failed, dry_run, payload, rate_limit, batch_size, send_concurrency, error_message, created_at, scheduled_for, started_at, completed_at, heartbeat_at, updated_at"
     )
     .in("status", ["queued", "running"])
     .order("created_at", { ascending: true })
@@ -2438,6 +2876,7 @@ async function buildSendJobProgressFromRow(
     batchSize: normalized.batchSize,
     sendConcurrency: normalized.sendConcurrency,
     createdAt: normalized.createdAt,
+    scheduledFor: normalized.scheduledFor,
     startedAt: normalized.startedAt,
     completedAt: normalized.completedAt,
     heartbeatAt: normalized.heartbeatAt,
@@ -2461,6 +2900,7 @@ function mapSendJobSummaries(rows: SendJobRowRaw[]): SendJobSummary[] {
       failed: normalized.failed,
       dryRun: normalized.dryRun,
       createdAt: normalized.createdAt,
+      scheduledFor: normalized.scheduledFor,
       startedAt: normalized.startedAt,
       completedAt: normalized.completedAt,
       heartbeatAt: normalized.heartbeatAt,
@@ -2481,6 +2921,23 @@ export async function claimQueuedSendJob(jobId: string): Promise<boolean> {
     .eq("status", "queued")
     .select("id");
   assertNoError(error, "Failed to claim send job");
+  return (data ?? []).length > 0;
+}
+
+export async function activateScheduledSendJob(jobId: string): Promise<boolean> {
+  const now = new Date().toISOString();
+  const db = getDb();
+  const { data, error } = await db
+    .from("send_jobs")
+    .update({
+      status: "queued",
+      updated_at: now,
+      error_message: null,
+    })
+    .eq("id", jobId)
+    .eq("status", "scheduled")
+    .select("id");
+  assertNoError(error, "Failed to activate scheduled send job");
   return (data ?? []).length > 0;
 }
 

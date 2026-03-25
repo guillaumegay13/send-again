@@ -89,12 +89,16 @@ export const openapiSpec = {
         properties: {
           id: { type: "string", format: "uuid" },
           workspaceId: { type: "string" },
-          status: { type: "string", enum: ["queued", "running", "completed", "failed", "cancelled"] },
+          status: {
+            type: "string",
+            enum: ["scheduled", "queued", "running", "completed", "failed", "cancelled"],
+          },
           total: { type: "integer" },
           sent: { type: "integer" },
           failed: { type: "integer" },
           dryRun: { type: "boolean" },
           createdAt: { type: "string", format: "date-time" },
+          scheduledFor: { type: ["string", "null"], format: "date-time" },
           startedAt: { type: ["string", "null"], format: "date-time" },
           completedAt: { type: ["string", "null"], format: "date-time" },
           heartbeatAt: { type: ["string", "null"], format: "date-time" },
@@ -119,6 +123,28 @@ export const openapiSpec = {
             },
           },
         ],
+      },
+      ContactEvent: {
+        type: "object",
+        properties: {
+          id: { type: "string", format: "uuid" },
+          workspaceId: { type: "string" },
+          contactEmail: { type: "string", format: "email" },
+          eventType: { type: "string" },
+          eventValue: { type: ["string", "null"] },
+          messageId: { type: ["string", "null"] },
+          sendJobId: { type: ["string", "null"], format: "uuid" },
+          campaignId: { type: ["string", "null"], format: "uuid" },
+          campaignRunId: { type: ["string", "null"], format: "uuid" },
+          campaignStepId: { type: ["string", "null"], format: "uuid" },
+          source: { type: "string" },
+          sourceRef: { type: ["string", "null"] },
+          detail: { type: ["string", "null"] },
+          metadata: { type: "object", additionalProperties: true },
+          occurredAt: { type: "string", format: "date-time" },
+          createdAt: { type: "string", format: "date-time" },
+          idempotencyKey: { type: ["string", "null"] },
+        },
       },
       HistoryEntry: {
         type: "object",
@@ -566,6 +592,11 @@ export const openapiSpec = {
                   subject: { type: "string" },
                   html: { type: "string", description: "Email body HTML" },
                   dryRun: { type: "boolean", default: false, description: "If true, returns recipient count without sending" },
+                  sendAt: {
+                    type: "string",
+                    format: "date-time",
+                    description: "Optional future timestamp for scheduled delivery",
+                  },
                   configSet: { type: "string" },
                   rateLimit: { type: "integer" },
                   footerHtml: { type: "string" },
@@ -596,8 +627,15 @@ export const openapiSpec = {
                       description: "Job created",
                       properties: {
                         jobId: { type: "string", format: "uuid" },
-                        status: { type: "string", const: "queued" },
+                        status: {
+                          type: "string",
+                          enum: ["scheduled", "queued"],
+                        },
                         total: { type: "integer" },
+                        scheduledFor: {
+                          type: ["string", "null"],
+                          format: "date-time",
+                        },
                         skippedUnsubscribed: { type: "integer" },
                         dryRun: { type: "boolean", const: false },
                       },
@@ -650,7 +688,8 @@ export const openapiSpec = {
             name: "status",
             in: "query" as const,
             schema: { type: "string" },
-            description: "Comma-separated status filter: queued,running,completed,failed,cancelled",
+            description:
+              "Comma-separated status filter: scheduled,queued,running,completed,failed,cancelled",
           },
         ],
         responses: {
@@ -665,6 +704,106 @@ export const openapiSpec = {
                   },
                 },
               },
+            },
+          },
+        },
+      },
+    },
+    "/api/contact-events": {
+      get: {
+        operationId: "listContactEvents",
+        summary: "List normalized contact events for a workspace",
+        tags: ["Send"],
+        security: [{ jwt: [] }, { apiKey: [] }],
+        parameters: [
+          {
+            name: "workspace",
+            in: "query" as const,
+            required: true,
+            schema: { type: "string" },
+          },
+          {
+            name: "contact",
+            in: "query" as const,
+            schema: { type: "string", format: "email" },
+          },
+          {
+            name: "messageId",
+            in: "query" as const,
+            schema: { type: "string" },
+          },
+          {
+            name: "eventType",
+            in: "query" as const,
+            schema: { type: "string" },
+          },
+          {
+            name: "limit",
+            in: "query" as const,
+            schema: { type: "integer", default: 50, minimum: 1, maximum: 200 },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Contact event list",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    items: {
+                      type: "array",
+                      items: { $ref: "#/components/schemas/ContactEvent" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      post: {
+        operationId: "createContactEvent",
+        summary: "Ingest a normalized contact event such as a reply",
+        tags: ["Send"],
+        security: [{ jwt: [] }, { apiKey: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["workspaceId", "eventType"],
+                properties: {
+                  workspaceId: { type: "string" },
+                  contactEmail: { type: "string", format: "email" },
+                  eventType: { type: "string", example: "reply_received" },
+                  eventValue: { type: ["string", "null"] },
+                  messageId: { type: "string" },
+                  source: { type: "string", default: "api" },
+                  sourceRef: { type: "string" },
+                  detail: { type: "string" },
+                  metadata: { type: "object", additionalProperties: true },
+                  occurredAt: { type: "string", format: "date-time" },
+                  idempotencyKey: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "200": {
+            description: "Created contact event",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/ContactEvent" },
+              },
+            },
+          },
+          "400": {
+            description: "Validation error",
+            content: {
+              "application/json": { schema: { $ref: "#/components/schemas/Error" } },
             },
           },
         },

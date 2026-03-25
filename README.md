@@ -126,7 +126,10 @@ npm run build && npm start
 | `POST` | `/api/send` | Enqueue a send job (or dry-run count) |
 | `GET` | `/api/send/status?jobId=<id>` | Live job progress |
 | `GET` | `/api/send/jobs?workspace=<id>` | List send jobs |
-| `POST` | `/api/send/process` | Worker endpoint for job processing |
+| `POST` | `/api/send/process` | Worker endpoint for send job processing |
+| `GET/POST` | `/api/tasks/process` | Canonical worker endpoint for scheduled task progression and send job processing |
+| `GET/POST` | `/api/campaigns/process` | Compatibility alias for `/api/tasks/process` |
+| `GET/POST` | `/api/contact-events` | Read or ingest normalized contact and reply events |
 | `GET/POST/DELETE` | `/api/contacts` | List, import, or explicitly delete contacts |
 | `GET/DELETE` | `/api/contacts/[email]` | Get or delete a contact |
 | `GET/POST/DELETE` | `/api/keys` | Manage API keys |
@@ -134,7 +137,7 @@ npm run build && npm start
 ### Authentication
 
 - **Supabase JWT** — works on all endpoints
-- **API key** (`sk_...`) — works on `/api/contacts`, `/api/send`, `/api/send/status`, `/api/send/jobs`
+- **API key** (`sk_...`) — works on `/api/contacts`, `/api/send`, `/api/send/status`, `/api/send/jobs`, `/api/contact-events`
 
 ### Billing endpoints
 
@@ -155,9 +158,14 @@ To receive delivery/open/click/bounce/complaint events:
 
 ## Production Recommendations
 
-- Use a cron job or external worker to call `POST /api/send/process` every minute
-- Set `SEND_JOB_PROCESSOR_TOKEN` and pass it via `x-send-job-token` header
+- On Vercel, use Vercel Cron to call `GET /api/tasks/process` every minute
+- For non-Vercel workers, call `POST /api/tasks/process`
+- `POST /api/send/process` remains available when you explicitly want send-job-only processing
+- `GET/POST /api/campaigns/process` remains available as a compatibility alias
+- Set `CRON_SECRET` for Vercel Cron auth
+- Set `SEND_JOB_PROCESSOR_TOKEN` and pass it via `x-send-job-token` or `Authorization: Bearer ...` for external workers
 - Keep the inline fallback enabled unless you have a reliable external worker
+- `POST /api/send` also accepts an optional `sendAt` ISO timestamp for first-class scheduled sends
 
 ## Environment Variable Reference
 
@@ -189,7 +197,10 @@ To receive delivery/open/click/bounce/complaint events:
 | `SEND_JOB_MAX_JOBS` | No | `1` | Max jobs per invocation |
 | `SEND_JOB_STALE_MS` | No | `180000` | Reclaim stale jobs after this delay |
 | `SEND_JOB_STALE_RECIPIENT_MS` | No | `180000` | Retry stale recipients after this delay |
-| `SEND_JOB_PROCESSOR_TOKEN` | No | — | Shared secret for `/api/send/process` |
+| `SCHEDULED_TASK_BATCH_SIZE` | No | `25` | Max scheduled tasks claimed per worker invocation |
+| `SCHEDULED_TASK_STALE_MS` | No | `180000` | Reclaim stale running scheduled tasks after this delay |
+| `CRON_SECRET` | No | — | Shared secret used by Vercel Cron via `Authorization: Bearer ...` for `GET /api/tasks/process` |
+| `SEND_JOB_PROCESSOR_TOKEN` | No | — | Shared secret for manual/background `POST` calls to the processor endpoints |
 | `SEND_JOB_AFTER_MAX_ITERATIONS` | No | `20` | Max processing loops via `after()` |
 | `SEND_JOB_STATUS_INLINE_PROCESS` | No | `true` | Let status endpoint process jobs inline |
 | `SEND_JOB_STATUS_INLINE_MAX_JOBS` | No | `3` | Max jobs per inline status poll |
