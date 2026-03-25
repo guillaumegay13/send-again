@@ -531,7 +531,7 @@ export async function deleteWorkspaceData(workspaceId: string): Promise<void> {
       .from("campaign_runs")
       .select("id")
       .eq("workspace_id", workspaceId)
-      .order("created_at", { ascending: true })
+      .order("id", { ascending: true })
       .range(campaignRunsFrom, campaignRunsFrom + pageSize - 1);
     if (isMissingTableError(campaignRunListError, "campaign_runs")) {
       break;

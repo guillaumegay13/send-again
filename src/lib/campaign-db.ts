@@ -179,6 +179,10 @@ function normalizeStringArray(value: unknown): string[] {
   );
 }
 
+function normalizeWorkspaceId(value: string): string {
+  return value.trim().toLowerCase();
+}
+
 function normalizeWorkflowRow(row: CampaignWorkflowRow): SavedCampaign {
   const definition = normalizeCampaign(row.definition);
   if (!definition) {
@@ -234,10 +238,11 @@ export async function listCampaignWorkflows(
   workspaceId: string
 ): Promise<SavedCampaign[]> {
   const db = getDb();
+  const normalizedWorkspaceId = normalizeWorkspaceId(workspaceId);
   const { data, error } = await db
     .from("campaign_workflows")
     .select("id, workspace_id, name, definition, created_at, updated_at")
-    .eq("workspace_id", workspaceId)
+    .eq("workspace_id", normalizedWorkspaceId)
     .order("updated_at", { ascending: false });
   assertCampaignTable(error, "campaign_workflows");
   assertNoError(error, "Failed to list campaigns");
@@ -249,10 +254,11 @@ export async function getCampaignWorkflowForWorkspace(
   campaignId: string
 ): Promise<SavedCampaign | null> {
   const db = getDb();
+  const normalizedWorkspaceId = normalizeWorkspaceId(workspaceId);
   const { data, error } = await db
     .from("campaign_workflows")
     .select("id, workspace_id, name, definition, created_at, updated_at")
-    .eq("workspace_id", workspaceId)
+    .eq("workspace_id", normalizedWorkspaceId)
     .eq("id", campaignId)
     .limit(1);
   assertCampaignTable(error, "campaign_workflows");
@@ -281,7 +287,7 @@ export async function upsertCampaignWorkflow(params: {
   draft: CampaignDraft;
 }): Promise<SavedCampaign> {
   const db = getDb();
-  const workspaceId = params.workspaceId.trim().toLowerCase();
+  const workspaceId = normalizeWorkspaceId(params.workspaceId);
   const sanitized = sanitizeCampaignDraft(params.draft);
   const now = new Date().toISOString();
   const { data: existingRows, error: existingError } = await db
@@ -329,10 +335,11 @@ export async function deleteCampaignWorkflow(
   campaignId: string
 ): Promise<void> {
   const db = getDb();
+  const normalizedWorkspaceId = normalizeWorkspaceId(workspaceId);
   const { error } = await db
     .from("campaign_workflows")
     .delete()
-    .eq("workspace_id", workspaceId)
+    .eq("workspace_id", normalizedWorkspaceId)
     .eq("id", campaignId);
   assertCampaignTable(error, "campaign_workflows");
   assertNoError(error, "Failed to delete campaign");
@@ -345,6 +352,7 @@ export async function createCampaignRun(params: {
   billingBypass: boolean;
 }): Promise<CampaignRunRow> {
   const db = getDb();
+  const workspaceId = normalizeWorkspaceId(params.workspaceId);
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   const { data, error } = await db
@@ -352,7 +360,7 @@ export async function createCampaignRun(params: {
     .insert({
       id,
       campaign_id: params.campaignId,
-      workspace_id: params.workspaceId,
+      workspace_id: workspaceId,
       user_id: params.userId,
       status: "queued",
       billing_bypass: params.billingBypass,
@@ -487,13 +495,14 @@ export async function getCampaignRunForWorkspace(
   workspaceId: string
 ): Promise<CampaignRunProgress | null> {
   const db = getDb();
+  const normalizedWorkspaceId = normalizeWorkspaceId(workspaceId);
   const { data, error } = await db
     .from("campaign_runs")
     .select(
       "id, campaign_id, workspace_id, user_id, status, billing_bypass, error_message, created_at, started_at, completed_at, heartbeat_at, updated_at"
     )
     .eq("id", runId)
-    .eq("workspace_id", workspaceId)
+    .eq("workspace_id", normalizedWorkspaceId)
     .limit(1);
   assertCampaignTable(error, "campaign_runs");
   assertNoError(error, "Failed to read campaign run");

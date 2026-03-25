@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { NextRequest } from "next/server";
 
 function normalizeToken(value: string | null | undefined): string | null {
@@ -35,14 +35,12 @@ function getProvidedToken(req: NextRequest): string | null {
   return getAuthorizationToken(req);
 }
 
-function constantTimeEquals(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-  if (leftBuffer.length !== rightBuffer.length) {
-    return false;
-  }
+function digestToken(value: string): Buffer {
+  return createHash("sha256").update(value).digest();
+}
 
-  return timingSafeEqual(leftBuffer, rightBuffer);
+function constantTimeEquals(left: string, right: string): boolean {
+  return timingSafeEqual(digestToken(left), digestToken(right));
 }
 
 function matchesAnyToken(providedToken: string | null, expectedTokens: string[]): boolean {
