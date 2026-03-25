@@ -161,7 +161,7 @@ export const openapiSpec = {
                 type: {
                   type: "string",
                   description:
-                    "SES event type (for example: Send, Delivery, Open, Click, Bounce, Complaint, Reject, DeliveryDelay, RenderingFailure, Subscription).",
+                    "Tracked event type (for example: Send, Delivery, Open, Reply, Click, Bounce, Complaint, Reject, DeliveryDelay, RenderingFailure, Subscription).",
                 },
                 timestamp: { type: "string", format: "date-time" },
                 detail: { type: "string" },
@@ -804,6 +804,83 @@ export const openapiSpec = {
             description: "Validation error",
             content: {
               "application/json": { schema: { $ref: "#/components/schemas/Error" } },
+            },
+          },
+        },
+      },
+    },
+    "/api/webhooks/replies": {
+      post: {
+        operationId: "ingestInboundReply",
+        summary: "Resolve an inbound email reply to a sent message and create reply events",
+        tags: ["Send"],
+        security: [{ jwt: [] }, { apiKey: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["workspaceId"],
+                properties: {
+                  workspaceId: { type: "string" },
+                  from: { type: "string", description: "Inbound sender address or raw From header" },
+                  to: {
+                    oneOf: [
+                      { type: "string" },
+                      { type: "array", items: { type: "string" } },
+                    ],
+                  },
+                  cc: {
+                    oneOf: [
+                      { type: "string" },
+                      { type: "array", items: { type: "string" } },
+                    ],
+                  },
+                  subject: { type: "string" },
+                  text: { type: "string" },
+                  html: { type: "string" },
+                  inReplyTo: { type: "string" },
+                  references: {
+                    oneOf: [
+                      { type: "string" },
+                      { type: "array", items: { type: "string" } },
+                    ],
+                  },
+                  providerMessageId: { type: "string" },
+                  source: { type: "string", default: "inbound_webhook" },
+                  sourceRef: { type: "string" },
+                  receivedAt: { type: "string", format: "date-time" },
+                  idempotencyKey: { type: "string" },
+                  replyOutcome: {
+                    type: "string",
+                    description: "Optional classification such as positive, negative, or meeting_booked",
+                  },
+                  metadata: { type: "object", additionalProperties: true },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "200": {
+            description: "Inbound reply resolved and stored",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    resolvedMessageId: { type: "string" },
+                    replyReceived: { $ref: "#/components/schemas/ContactEvent" },
+                    replyOutcome: {
+                      oneOf: [
+                        { $ref: "#/components/schemas/ContactEvent" },
+                        { type: "null" },
+                      ],
+                    },
+                  },
+                },
+              },
             },
           },
         },

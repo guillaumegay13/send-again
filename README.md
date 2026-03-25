@@ -10,7 +10,7 @@ Open source email campaign platform. Compose HTML emails, manage contacts, send 
 - **AI Compose** — describe what you want, get HTML email generated for you
 - **HTML Preview** — live preview as you write
 - **Campaigns** — organize sends into campaigns with per-campaign analytics
-- **Event Tracking** — first-party open tracking plus SNS webhooks for delivery, clicks, bounces, and complaints
+- **Event Tracking** — first-party open tracking, provider-agnostic reply ingestion, and SNS webhooks for delivery, clicks, bounces, and complaints
 - **Contact Management** — CSV and API import, automatic unsubscribe/bounce handling
 - **Automatic DNS Setup** — Namecheap, Cloudflare, and Route53 integration for SPF/DKIM
 - **High Deliverability** — powered by Amazon SES with domain verification built in
@@ -130,6 +130,7 @@ npm run build && npm start
 | `GET/POST` | `/api/tasks/process` | Canonical worker endpoint for scheduled task progression and send job processing |
 | `GET/POST` | `/api/campaigns/process` | Compatibility alias for `/api/tasks/process` |
 | `GET/POST` | `/api/contact-events` | Read or ingest normalized contact and reply events |
+| `POST` | `/api/webhooks/replies` | Resolve inbound replies into `reply_received` / `reply_outcome` events |
 | `GET/POST/DELETE` | `/api/contacts` | List, import, or explicitly delete contacts |
 | `GET/DELETE` | `/api/contacts/[email]` | Get or delete a contact |
 | `GET/POST/DELETE` | `/api/keys` | Manage API keys |
@@ -156,6 +157,15 @@ To receive delivery/click/bounce/complaint events:
 2. Configure your SES Configuration Set to publish events to that topic
 3. Add an HTTPS subscription pointing to `https://your-domain/api/webhooks/sns`
 
+## Reply Tracking
+
+Automatic reply tracking uses two layers:
+
+1. Outbound emails can set a signed `Reply-To` on `REPLY_TRACKING_DOMAIN`
+2. Your inbound provider or forwarder posts normalized reply data to `POST /api/webhooks/replies`
+
+The webhook resolves the original outbound message from the tracked `Reply-To` address or `In-Reply-To` / `References` headers, then creates `reply_received` and optional `reply_outcome` contact events. `reply_received` also appears in send History as `Replied`.
+
 ## Production Recommendations
 
 - On Vercel, use Vercel Cron to call `GET /api/tasks/process` every minute
@@ -180,6 +190,8 @@ To receive delivery/click/bounce/complaint events:
 | `APP_BASE_URL` | No | request origin | Public base URL for unsubscribe and open-tracking links |
 | `UNSUBSCRIBE_SECRET` | No | `SUPABASE_SECRET_KEY` | Secret for signing unsubscribe links |
 | `OPEN_TRACKING_SECRET` | No | `UNSUBSCRIBE_SECRET` | Secret for signing open-tracking pixel URLs |
+| `REPLY_TRACKING_SECRET` | No | `OPEN_TRACKING_SECRET` | Secret for signing tracked `Reply-To` addresses |
+| `REPLY_TRACKING_DOMAIN` | No | — | Inbound domain or subdomain used in tracked `Reply-To` addresses |
 | `OPENAI_API_KEY` | No | — | Enables AI email generation |
 | `OPENAI_MODEL` | No | `gpt-4.1-mini` | Model for AI generation |
 | `INITIAL_OWNER_EMAIL` | No | — | Bootstrap owner account |

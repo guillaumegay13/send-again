@@ -4,6 +4,7 @@ export type HistoryEventType =
   | "send"
   | "delivery"
   | "open"
+  | "reply"
   | "click"
   | "bounce"
   | "complaint";
@@ -93,6 +94,7 @@ export const HISTORY_EVENTS: HistoryEventType[] = [
   "send",
   "delivery",
   "open",
+  "reply",
   "click",
   "bounce",
   "complaint",
@@ -154,6 +156,7 @@ export function normalizeHistoryEventType(value: unknown): HistoryEventType {
     value === "send" ||
     value === "delivery" ||
     value === "open" ||
+    value === "reply" ||
     value === "click" ||
     value === "bounce" ||
     value === "complaint"
