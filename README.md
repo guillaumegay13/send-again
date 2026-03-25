@@ -129,6 +129,7 @@ npm run build && npm start
 | `POST` | `/api/send/process` | Worker endpoint for send job processing |
 | `GET/POST` | `/api/tasks/process` | Canonical worker endpoint for scheduled task progression and send job processing |
 | `GET/POST` | `/api/campaigns/process` | Compatibility alias for `/api/tasks/process` |
+| `GET/POST` | `/api/contact-events` | Read or ingest normalized contact and reply events |
 | `GET/POST/DELETE` | `/api/contacts` | List, import, or explicitly delete contacts |
 | `GET/DELETE` | `/api/contacts/[email]` | Get or delete a contact |
 | `GET/POST/DELETE` | `/api/keys` | Manage API keys |
@@ -136,7 +137,7 @@ npm run build && npm start
 ### Authentication
 
 - **Supabase JWT** — works on all endpoints
-- **API key** (`sk_...`) — works on `/api/contacts`, `/api/send`, `/api/send/status`, `/api/send/jobs`
+- **API key** (`sk_...`) — works on `/api/contacts`, `/api/send`, `/api/send/status`, `/api/send/jobs`, `/api/contact-events`
 
 ### Billing endpoints
 
