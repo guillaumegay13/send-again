@@ -281,14 +281,32 @@ export async function upsertCampaignWorkflow(params: {
   draft: CampaignDraft;
 }): Promise<SavedCampaign> {
   const db = getDb();
+  const workspaceId = params.workspaceId.trim().toLowerCase();
   const sanitized = sanitizeCampaignDraft(params.draft);
   const now = new Date().toISOString();
+  const { data: existingRows, error: existingError } = await db
+    .from("campaign_workflows")
+    .select("workspace_id")
+    .eq("id", sanitized.campaignId)
+    .limit(1);
+  assertCampaignTable(existingError, "campaign_workflows");
+  assertNoError(existingError, "Failed to validate campaign ownership");
+
+  const existingWorkspaceId = String(
+    (existingRows as Array<{ workspace_id: unknown }> | null)?.[0]?.workspace_id ?? ""
+  )
+    .trim()
+    .toLowerCase();
+  if (existingWorkspaceId && existingWorkspaceId !== workspaceId) {
+    throw new Error("Campaign belongs to a different workspace");
+  }
+
   const { data, error } = await db
     .from("campaign_workflows")
     .upsert(
       {
         id: sanitized.campaignId,
-        workspace_id: params.workspaceId,
+        workspace_id: workspaceId,
         name: sanitized.name.trim() || "Campaign",
         definition: sanitized,
         updated_at: now,

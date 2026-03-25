@@ -126,7 +126,7 @@ npm run build && npm start
 | `POST` | `/api/send` | Enqueue a send job (or dry-run count) |
 | `GET` | `/api/send/status?jobId=<id>` | Live job progress |
 | `GET` | `/api/send/jobs?workspace=<id>` | List send jobs |
-| `GET/POST` | `/api/send/process` | Worker endpoint for send job processing |
+| `POST` | `/api/send/process` | Worker endpoint for send job processing |
 | `GET/POST` | `/api/campaigns/process` | Worker endpoint for campaign progression and send job processing |
 | `GET/POST/DELETE` | `/api/contacts` | List, import, or explicitly delete contacts |
 | `GET/DELETE` | `/api/contacts/[email]` | Get or delete a contact |
@@ -158,7 +158,8 @@ To receive delivery/open/click/bounce/complaint events:
 
 - On Vercel, use Vercel Cron to call `GET /api/campaigns/process` every minute
 - For non-Vercel workers, call `POST /api/campaigns/process` or `POST /api/send/process`
-- Set `CRON_SECRET` for Vercel Cron auth, or set `SEND_JOB_PROCESSOR_TOKEN` and pass it via `x-send-job-token` for external workers
+- Set `CRON_SECRET` for Vercel Cron auth
+- Set `SEND_JOB_PROCESSOR_TOKEN` and pass it via `x-send-job-token` or `Authorization: Bearer ...` for external workers
 - Keep the inline fallback enabled unless you have a reliable external worker
 
 ## Environment Variable Reference
@@ -191,8 +192,8 @@ To receive delivery/open/click/bounce/complaint events:
 | `SEND_JOB_MAX_JOBS` | No | `1` | Max jobs per invocation |
 | `SEND_JOB_STALE_MS` | No | `180000` | Reclaim stale jobs after this delay |
 | `SEND_JOB_STALE_RECIPIENT_MS` | No | `180000` | Retry stale recipients after this delay |
-| `CRON_SECRET` | No | — | Shared secret used by Vercel Cron via `Authorization: Bearer ...` |
-| `SEND_JOB_PROCESSOR_TOKEN` | No | — | Shared secret for `/api/send/process` |
+| `CRON_SECRET` | No | — | Shared secret used by Vercel Cron via `Authorization: Bearer ...` for `GET /api/campaigns/process` |
+| `SEND_JOB_PROCESSOR_TOKEN` | No | — | Shared secret for manual/background `POST` calls to the processor endpoints |
 | `SEND_JOB_AFTER_MAX_ITERATIONS` | No | `20` | Max processing loops via `after()` |
 | `SEND_JOB_STATUS_INLINE_PROCESS` | No | `true` | Let status endpoint process jobs inline |
 | `SEND_JOB_STATUS_INLINE_MAX_JOBS` | No | `3` | Max jobs per inline status poll |

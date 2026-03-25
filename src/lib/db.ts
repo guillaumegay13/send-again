@@ -523,22 +523,45 @@ export async function deleteWorkspaceData(workspaceId: string): Promise<void> {
     assertNoError(sendJobsError, "Failed to delete workspace send jobs");
   }
 
-  const { data: campaignRunRows, error: campaignRunListError } = await db
-    .from("campaign_runs")
-    .select("id")
-    .eq("workspace_id", workspaceId);
-  if (!isMissingTableError(campaignRunListError, "campaign_runs")) {
+  const campaignRunIds: string[] = [];
+  let campaignRunsFrom = 0;
+
+  while (true) {
+    const { data: campaignRunRows, error: campaignRunListError } = await db
+      .from("campaign_runs")
+      .select("id")
+      .eq("workspace_id", workspaceId)
+      .order("created_at", { ascending: true })
+      .range(campaignRunsFrom, campaignRunsFrom + pageSize - 1);
+    if (isMissingTableError(campaignRunListError, "campaign_runs")) {
+      break;
+    }
     assertNoError(campaignRunListError, "Failed to list workspace campaign runs");
+
+    const rows = (campaignRunRows ?? []) as Array<{ id: string }>;
+    if (rows.length === 0) {
+      break;
+    }
+
+    for (const row of rows) {
+      const campaignRunId = String(row.id ?? "").trim();
+      if (campaignRunId) {
+        campaignRunIds.push(campaignRunId);
+      }
+    }
+
+    campaignRunsFrom += rows.length;
+    if (rows.length < pageSize) {
+      break;
+    }
   }
 
-  const campaignRunIds = ((campaignRunRows ?? []) as Array<{ id: string }>)
-    .map((row) => String(row.id ?? "").trim())
-    .filter(Boolean);
-  if (campaignRunIds.length > 0) {
+  for (const chunk of chunkArray(campaignRunIds, 1000)) {
+    if (chunk.length === 0) continue;
     const { error: campaignRunStepsError } = await db
       .from("campaign_run_steps")
       .delete()
-      .in("run_id", campaignRunIds);
+      .in("run_id", chunk);
     if (!isMissingTableError(campaignRunStepsError, "campaign_run_steps")) {
       assertNoError(
         campaignRunStepsError,

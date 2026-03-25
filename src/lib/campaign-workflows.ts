@@ -216,7 +216,8 @@ export function makeDefaultAudience(): SendAudience {
 
 export function createSendNode(overrides: Partial<SendNode> = {}): SendNode {
   const defaultAudience = makeDefaultAudience();
-  const overrideAudience: Partial<SendAudience> = overrides.audience ?? {};
+  const { audience: overrideAudienceRaw, ...nodeOverrides } = overrides;
+  const overrideAudience: Partial<SendAudience> = overrideAudienceRaw ?? {};
   return {
     kind: "send",
     id: uid("send"),
@@ -224,6 +225,7 @@ export function createSendNode(overrides: Partial<SendNode> = {}): SendNode {
     from: "",
     subject: "",
     html: "<p>Hello {{email}},</p>\n<p>Your message...</p>",
+    ...nodeOverrides,
     audience: {
       ...defaultAudience,
       ...overrideAudience,
@@ -231,7 +233,6 @@ export function createSendNode(overrides: Partial<SendNode> = {}): SendNode {
         ? overrideAudience.conditions
         : defaultAudience.conditions,
     },
-    ...overrides,
   };
 }
 

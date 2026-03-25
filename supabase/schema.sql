@@ -158,6 +158,54 @@ create table if not exists campaign_run_steps (
   updated_at timestamptz not null default now()
 );
 
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'send_jobs_campaign_id_fkey'
+  ) then
+    alter table send_jobs
+      add constraint send_jobs_campaign_id_fkey
+      foreign key (campaign_id) references campaign_workflows(id) on delete set null;
+  end if;
+end
+$$;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'send_jobs_campaign_run_id_fkey'
+  ) then
+    alter table send_jobs
+      add constraint send_jobs_campaign_run_id_fkey
+      foreign key (campaign_run_id) references campaign_runs(id) on delete set null;
+  end if;
+end
+$$;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'send_jobs_campaign_step_id_fkey'
+  ) then
+    alter table send_jobs
+      add constraint send_jobs_campaign_step_id_fkey
+      foreign key (campaign_step_id) references campaign_run_steps(id) on delete set null;
+  end if;
+end
+$$;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'campaign_run_steps_blocking_send_job_id_fkey'
+  ) then
+    alter table campaign_run_steps
+      add constraint campaign_run_steps_blocking_send_job_id_fkey
+      foreign key (blocking_send_job_id) references send_jobs(id) on delete set null;
+  end if;
+end
+$$;
+
 create index if not exists idx_contacts_workspace on contacts(workspace_id);
 create index if not exists idx_contact_unsubscribes_workspace on contact_unsubscribes(workspace_id);
 create index if not exists idx_sends_workspace on sends(workspace_id);
@@ -374,6 +422,9 @@ alter table if exists email_events enable row level security;
 alter table if exists workspace_memberships enable row level security;
 alter table if exists send_jobs enable row level security;
 alter table if exists send_job_recipients enable row level security;
+alter table if exists campaign_workflows enable row level security;
+alter table if exists campaign_runs enable row level security;
+alter table if exists campaign_run_steps enable row level security;
 alter table if exists api_keys enable row level security;
 alter table if exists workspace_billing enable row level security;
 alter table if exists workspace_credit_grants enable row level security;

@@ -14,15 +14,26 @@ export async function POST(
     const body = (await req.json().catch(() => ({}))) as {
       workspaceId?: unknown;
     };
-    const workspaceId = String(body.workspaceId ?? "").trim().toLowerCase();
-    if (!workspaceId) {
+    const requestedWorkspaceId = String(body.workspaceId ?? "")
+      .trim()
+      .toLowerCase();
+    const auth = await requireWorkspaceAuth(
+      req,
+      requestedWorkspaceId || null,
+      "send.write"
+    );
+    const workspaceId = auth.workspace;
+    if (
+      auth.authMethod === "api_key" &&
+      requestedWorkspaceId &&
+      requestedWorkspaceId !== workspaceId
+    ) {
       return NextResponse.json(
-        { error: "Missing workspaceId" },
+        { error: "workspaceId does not match API key workspace" },
         { status: 400 }
       );
     }
 
-    const auth = await requireWorkspaceAuth(req, workspaceId, "send.write");
     let userId = auth.userId ?? null;
     if (!userId) {
       userId = await getPreferredWorkspaceUserId(workspaceId);

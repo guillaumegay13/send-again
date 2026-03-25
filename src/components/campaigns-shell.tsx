@@ -3,6 +3,7 @@
 import * as dagre from "dagre";
 import {
   ChangeEvent,
+  KeyboardEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -113,7 +114,7 @@ function freshDraftState(): { draft: CampaignDraft; snapshot: string } {
   const draft = sanitizeCampaignDraft(defaultCampaign());
   return {
     draft,
-    snapshot: JSON.stringify(draft),
+    snapshot: snapshotCampaign(draft),
   };
 }
 
@@ -128,6 +129,10 @@ function mergeCampaign(list: SavedCampaign[], nextCampaign: SavedCampaign): Save
   const nextList = [...list];
   nextList[existingIndex] = nextCampaign;
   return nextList;
+}
+
+function snapshotCampaign(value: CampaignDraft | SavedCampaign): string {
+  return JSON.stringify(sanitizeCampaignDraft(value));
 }
 
 function edgeColor(port: WorkflowPort): string {
@@ -502,7 +507,7 @@ export function CampaignsShell({
 
   const saveRequestRef = useRef(0);
   const latestDraftSnapshotRef = useRef(initialDraft.snapshot);
-  latestDraftSnapshotRef.current = JSON.stringify(draft);
+  latestDraftSnapshotRef.current = snapshotCampaign(draft);
 
   const fieldKeys = useMemo(() => ["verified"], []);
 
@@ -685,7 +690,7 @@ export function CampaignsShell({
     [activeCampaignId, saveState]
   );
 
-  const draftSnapshot = useMemo(() => JSON.stringify(draft), [draft]);
+  const draftSnapshot = useMemo(() => snapshotCampaign(draft), [draft]);
   const hasUnsavedChanges =
     !!activeCampaignId && draftSnapshot !== savedSnapshot;
 
@@ -707,7 +712,7 @@ export function CampaignsShell({
       }
 
       const campaignToSave = sanitizeCampaignDraft(draftOverride ?? draft);
-      const snapshotAtSaveStart = JSON.stringify(campaignToSave);
+      const snapshotAtSaveStart = snapshotCampaign(campaignToSave);
       const requestId = ++saveRequestRef.current;
 
       setSaveState("saving");
@@ -730,13 +735,16 @@ export function CampaignsShell({
         }
 
         setCampaigns((current) => mergeCampaign(current, saved));
+        const savedSnapshot = snapshotCampaign(saved);
         if (
           latestDraftSnapshotRef.current === snapshotAtSaveStart &&
           saved.campaignId === campaignToSave.campaignId
         ) {
           setDraft(saved);
+          setSavedSnapshot(savedSnapshot);
+        } else {
+          setSavedSnapshot(snapshotAtSaveStart);
         }
-        setSavedSnapshot(snapshotAtSaveStart);
         setSaveState("saved");
         setSaveMessage(
           successMessage ??
@@ -904,7 +912,7 @@ export function CampaignsShell({
       );
       if (!campaignToEdit) return;
       const sanitized = sanitizeCampaignDraft(campaignToEdit);
-      const snapshot = JSON.stringify(sanitized);
+      const snapshot = snapshotCampaign(sanitized);
       setActiveCampaignId(campaignId);
       setDraft(sanitized);
       setSelectedNodeId(sanitized.nodes[0]?.id ?? null);
@@ -929,12 +937,13 @@ export function CampaignsShell({
       createdAt: now,
       updatedAt: now,
     };
-    const snapshot = JSON.stringify(created);
+    const sanitized = sanitizeCampaignDraft(created);
+    const snapshot = snapshotCampaign(sanitized);
 
     setCampaigns((current) => [created, ...current]);
     setActiveCampaignId(created.campaignId);
-    setDraft(created);
-    setSelectedNodeId(created.nodes[0]?.id ?? null);
+    setDraft(sanitized);
+    setSelectedNodeId(sanitized.nodes[0]?.id ?? null);
     setSavedSnapshot(snapshot);
     setSaveState("idle");
     setSaveMessage("New campaign draft created.");
@@ -943,7 +952,7 @@ export function CampaignsShell({
     setRunError(null);
     setActiveRunId(null);
     setActiveRun(null);
-    void saveCampaign("manual", created, "Campaign created");
+    void saveCampaign("manual", sanitized, "Campaign created");
   }, [campaigns.length, saveCampaign]);
 
   const closeBuilder = useCallback(() => {
@@ -1711,13 +1720,22 @@ export function CampaignsShell({
                               width: `${NODE_WIDTH}px`,
                             }}
                           >
-                            <button
-                              type="button"
+                            <div
+                              role="button"
+                              tabIndex={0}
+                              aria-pressed={selected}
                               onClick={() => setSelectedNodeId(node.id)}
-                              className={`relative w-full rounded-xl border bg-white p-3 text-left transition ${
+                              onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
+                                if (event.key !== "Enter" && event.key !== " ") {
+                                  return;
+                                }
+                                event.preventDefault();
+                                setSelectedNodeId(node.id);
+                              }}
+                              className={`relative w-full rounded-xl border bg-white p-3 text-left transition focus:outline-none ${
                                 selected
                                   ? "border-gray-900 shadow ring-2 ring-gray-900/15"
-                                  : "border-gray-200 hover:border-gray-300"
+                                  : "border-gray-200 hover:border-gray-300 focus:ring-2 focus:ring-gray-900/15"
                               }`}
                               style={{ minHeight: `${NODE_HEIGHT}px` }}
                             >
@@ -1790,7 +1808,7 @@ export function CampaignsShell({
                                   })
                                 )}
                               </div>
-                            </button>
+                            </div>
                           </div>
                         );
                       })}

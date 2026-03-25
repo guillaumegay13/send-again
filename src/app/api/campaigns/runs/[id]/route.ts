@@ -3,8 +3,6 @@ import {
   getCampaignRunForUser,
   getCampaignRunForWorkspace,
 } from "@/lib/campaign-db";
-import { processCampaignRuns } from "@/lib/campaign-runtime";
-import { processSendJobs } from "@/lib/send-job-processor";
 import {
   apiErrorResponse,
   requireAuthenticatedUser,
@@ -48,33 +46,6 @@ export async function GET(
 
     if (!progress) {
       return NextResponse.json({ error: "Campaign run not found" }, { status: 404 });
-    }
-
-    if (["queued", "running", "waiting"].includes(progress.status)) {
-      try {
-        await processCampaignRuns({
-          maxPendingSteps: 10,
-          maxWaitingSteps: 10,
-        });
-        await processSendJobs({
-          maxJobs: 3,
-          maxRecipientsPerJob: 50,
-        });
-      } catch (error) {
-        console.error("Inline campaign processing from status route failed:", error);
-      }
-
-      if (apiKeyWorkspace) {
-        const refreshed = await getCampaignRunForWorkspace(id, apiKeyWorkspace);
-        if (refreshed) {
-          progress = refreshed;
-        }
-      } else if (jwtUserId) {
-        const refreshed = await getCampaignRunForUser(id, jwtUserId);
-        if (refreshed) {
-          progress = refreshed;
-        }
-      }
     }
 
     return NextResponse.json({

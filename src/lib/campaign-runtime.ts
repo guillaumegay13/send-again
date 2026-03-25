@@ -74,6 +74,16 @@ interface CampaignProcessOptions {
   maxWaitingSteps?: number;
 }
 
+function chunkArray<T>(items: T[], size: number): T[][] {
+  if (size <= 0) return [items];
+
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+}
+
 function normalizePositiveInteger(value: unknown, fallback: number): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
@@ -203,46 +213,50 @@ async function loadRecipientHistory(
 
   const db = getDb();
   const recipientSet = new Set(recipientEmails.map((email) => email.toLowerCase()));
+  const recipientChunks = chunkArray(Array.from(recipientSet), 200);
   const sendsByMessageId = new Map<
     string,
     { recipient: string; subject: string }
   >();
   const pageSize = 1000;
-  let from = 0;
+  for (const recipientChunk of recipientChunks) {
+    let from = 0;
 
-  while (true) {
-    const { data, error } = await db
-      .from("sends")
-      .select("message_id, recipient, subject")
-      .eq("workspace_id", workspaceId)
-      .order("id", { ascending: true })
-      .range(from, from + pageSize - 1);
-    if (error) {
-      throw new Error(`Failed to fetch campaign history sends: ${error.message}`);
-    }
-
-    const rows = (data ?? []) as Array<{
-      message_id: string;
-      recipient: string;
-      subject: string;
-    }>;
-    if (rows.length === 0) break;
-
-    for (const row of rows) {
-      const recipient = String(row.recipient ?? "").trim().toLowerCase();
-      if (!recipient || !recipientSet.has(recipient)) {
-        continue;
+    while (true) {
+      const { data, error } = await db
+        .from("sends")
+        .select("message_id, recipient, subject")
+        .eq("workspace_id", workspaceId)
+        .in("recipient", recipientChunk)
+        .order("id", { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (error) {
+        throw new Error(`Failed to fetch campaign history sends: ${error.message}`);
       }
-      const messageId = String(row.message_id ?? "").trim();
-      if (!messageId) continue;
-      sendsByMessageId.set(messageId, {
-        recipient,
-        subject: String(row.subject ?? ""),
-      });
-    }
 
-    from += rows.length;
-    if (rows.length < pageSize) break;
+      const rows = (data ?? []) as Array<{
+        message_id: string;
+        recipient: string;
+        subject: string;
+      }>;
+      if (rows.length === 0) break;
+
+      for (const row of rows) {
+        const recipient = String(row.recipient ?? "").trim().toLowerCase();
+        if (!recipient || !recipientSet.has(recipient)) {
+          continue;
+        }
+        const messageId = String(row.message_id ?? "").trim();
+        if (!messageId) continue;
+        sendsByMessageId.set(messageId, {
+          recipient,
+          subject: String(row.subject ?? ""),
+        });
+      }
+
+      from += rows.length;
+      if (rows.length < pageSize) break;
+    }
   }
 
   if (sendsByMessageId.size === 0) {
@@ -531,7 +545,6 @@ async function processClaimedStep(
     await failOpenCampaignRunSteps(run.id, message);
     await setCampaignRunStatus(run.id, "failed", message);
     summary.stepsCompleted += 1;
-    summary.runsFailed += 1;
     return;
   }
 
@@ -545,7 +558,6 @@ async function processClaimedStep(
     await failOpenCampaignRunSteps(run.id, message);
     await setCampaignRunStatus(run.id, "failed", message);
     summary.stepsCompleted += 1;
-    summary.runsFailed += 1;
     return;
   }
 

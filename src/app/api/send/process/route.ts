@@ -29,10 +29,6 @@ async function handleProcess(req: NextRequest) {
   }
 }
 
-export async function GET(req: NextRequest) {
-  return handleProcess(req);
-}
-
 export async function POST(req: NextRequest) {
   return handleProcess(req);
 }
