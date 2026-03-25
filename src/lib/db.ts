@@ -3055,6 +3055,26 @@ export async function claimSendJobRecipients(
   }));
 }
 
+export async function getSendJobRecipientMessageId(
+  id: number
+): Promise<string | null> {
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    return null;
+  }
+
+  const db = getDb();
+  const { data, error } = await db
+    .from("send_job_recipients")
+    .select("message_id")
+    .eq("id", id)
+    .limit(1);
+  assertNoError(error, "Failed to load send job recipient message id");
+
+  const row = (data ?? [])[0] as { message_id: string | null } | undefined;
+  const messageId = String(row?.message_id ?? "").trim();
+  return messageId || null;
+}
+
 export async function markSendJobRecipientSent(
   id: number,
   messageId: string | null
