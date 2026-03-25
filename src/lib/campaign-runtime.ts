@@ -5,13 +5,12 @@ import {
   createCampaignRunStep,
   failOpenCampaignRunSteps,
   getCampaignRunById,
+  getCampaignRunStepById,
   getCampaignRunForWorkspace,
   getCampaignWorkflowForWorkspace,
   getCampaignWorkflowById,
   getSendJobStatusLite,
   getSentRecipientsForSendJob,
-  listPendingCampaignRunSteps,
-  listWaitingCampaignRunSteps,
   markCampaignRunHeartbeat,
   markCampaignRunRunning,
   setCampaignRunStatus,
@@ -43,6 +42,7 @@ import {
   type SendAudience,
   type WorkflowNode,
 } from "@/lib/campaign-workflows";
+import { enqueueScheduledTask } from "@/lib/task-queue";
 
 interface CandidateContact {
   email: string;
@@ -74,6 +74,12 @@ interface CampaignProcessOptions {
   maxWaitingSteps?: number;
 }
 
+interface CampaignTaskResult {
+  requeueAt?: string | null;
+}
+
+const CAMPAIGN_WAIT_RETRY_MS = 60000;
+
 function chunkArray<T>(items: T[], size: number): T[][] {
   if (size <= 0) return [items];
 
@@ -94,16 +100,6 @@ function normalizeNonNegativeInteger(value: unknown, fallback: number): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(0, Math.floor(parsed));
-}
-
-function trimMessage(value: unknown): string {
-  const text =
-    typeof value === "string"
-      ? value
-      : value instanceof Error
-      ? value.message
-      : "Campaign step failed";
-  return text.replace(/\s+/g, " ").trim().slice(0, 1000);
 }
 
 function normalizeFieldValue(
@@ -386,6 +382,36 @@ function getDelayMs(node: WorkflowNode): number {
   return (days * 24 + hours) * 60 * 60 * 1000;
 }
 
+async function enqueueCampaignStepTask(params: {
+  stepId: string;
+  workspaceId: string;
+  dueAt?: string | null;
+}): Promise<void> {
+  await enqueueScheduledTask({
+    kind: "campaign_step",
+    workspaceId: params.workspaceId,
+    dueAt: params.dueAt ?? new Date().toISOString(),
+    payload: { stepId: params.stepId },
+    idempotencyKey: `campaign-step:${params.stepId}`,
+    maxAttempts: 8,
+  });
+}
+
+async function enqueueCampaignWaitTask(params: {
+  stepId: string;
+  workspaceId: string;
+  dueAt?: string | null;
+}): Promise<void> {
+  await enqueueScheduledTask({
+    kind: "campaign_wait",
+    workspaceId: params.workspaceId,
+    dueAt: params.dueAt ?? new Date().toISOString(),
+    payload: { stepId: params.stepId },
+    idempotencyKey: `campaign-wait:${params.stepId}`,
+    maxAttempts: 120,
+  });
+}
+
 async function enqueueCampaignSendJob(params: {
   runId: string;
   stepId: string;
@@ -487,41 +513,10 @@ async function syncCampaignRunStatus(runId: string): Promise<CampaignRunStatus |
   return "completed";
 }
 
-async function releaseWaitingStep(step: CampaignRunStep): Promise<boolean> {
-  if (!step.blockingSendJobId) {
-    await setCampaignRunStepPending({
-      stepId: step.id,
-      dueAt: new Date().toISOString(),
-      recipientEmails: step.recipientEmails,
-    });
-    return true;
-  }
-
-  const job = await getSendJobStatusLite(step.blockingSendJobId);
-  if (
-    !job ||
-    !["completed", "failed", "cancelled"].includes(job.status.trim().toLowerCase())
-  ) {
-    return false;
-  }
-
-  const sentRecipients = await getSentRecipientsForSendJob(step.blockingSendJobId);
-  await setCampaignRunStepPending({
-    stepId: step.id,
-    dueAt: new Date().toISOString(),
-    recipientEmails: sentRecipients,
-  });
-  return true;
-}
-
-async function processClaimedStep(
-  step: CampaignRunStep,
-  summary: CampaignRunProcessSummary
-): Promise<void> {
+async function processClaimedStep(step: CampaignRunStep): Promise<void> {
   const run = await getCampaignRunById(step.runId);
   if (!run) {
     await setCampaignRunStepFailed(step.id, "Campaign run not found");
-    summary.stepsCompleted += 1;
     return;
   }
 
@@ -534,7 +529,6 @@ async function processClaimedStep(
       step.id,
       `Campaign run is already ${run.status}`
     );
-    summary.stepsCompleted += 1;
     return;
   }
 
@@ -544,7 +538,6 @@ async function processClaimedStep(
     await setCampaignRunStepFailed(step.id, message);
     await failOpenCampaignRunSteps(run.id, message);
     await setCampaignRunStatus(run.id, "failed", message);
-    summary.stepsCompleted += 1;
     return;
   }
 
@@ -557,7 +550,6 @@ async function processClaimedStep(
     await setCampaignRunStepFailed(step.id, message);
     await failOpenCampaignRunSteps(run.id, message);
     await setCampaignRunStatus(run.id, "failed", message);
-    summary.stepsCompleted += 1;
     return;
   }
 
@@ -585,37 +577,43 @@ async function processClaimedStep(
         node,
         recipients,
       });
-      summary.sendJobsCreated += 1;
 
       for (const edge of outgoingEdgesByNode.get(node.id) ?? []) {
-        await createCampaignRunStep({
+        const nextStep = await createCampaignRunStep({
           runId: run.id,
           nodeId: edge.toNodeId,
           status: "waiting",
           blockingSendJobId: sendJobId,
           recipientEmails: recipients,
         });
+        await enqueueCampaignWaitTask({
+          stepId: nextStep.id,
+          workspaceId: run.workspaceId,
+        });
       }
     }
 
     await setCampaignRunStepCompleted(step.id);
-    summary.stepsCompleted += 1;
     return;
   }
 
   if (isDelayNode(node)) {
     const dueAt = new Date(Date.now() + getDelayMs(node)).toISOString();
     for (const edge of outgoingEdgesByNode.get(node.id) ?? []) {
-      await createCampaignRunStep({
+      const nextStep = await createCampaignRunStep({
         runId: run.id,
         nodeId: edge.toNodeId,
         dueAt,
         recipientEmails: step.recipientEmails,
       });
+      await enqueueCampaignStepTask({
+        stepId: nextStep.id,
+        workspaceId: run.workspaceId,
+        dueAt,
+      });
     }
 
     await setCampaignRunStepCompleted(step.id);
-    summary.stepsCompleted += 1;
     return;
   }
 
@@ -637,20 +635,98 @@ async function processClaimedStep(
       if (recipients.length === 0) {
         continue;
       }
-      await createCampaignRunStep({
+      const nextStep = await createCampaignRunStep({
         runId: run.id,
         nodeId: edge.toNodeId,
         recipientEmails: recipients,
       });
+      await enqueueCampaignStepTask({
+        stepId: nextStep.id,
+        workspaceId: run.workspaceId,
+      });
     }
 
     await setCampaignRunStepCompleted(step.id);
-    summary.stepsCompleted += 1;
     return;
   }
 
   await setCampaignRunStepCompleted(step.id);
-  summary.stepsCompleted += 1;
+}
+
+export async function handleCampaignStepTask(
+  stepId: string
+): Promise<CampaignTaskResult> {
+  const claimed = await claimCampaignRunStep(stepId);
+  if (!claimed) {
+    return {};
+  }
+
+  await processClaimedStep(claimed);
+  await syncCampaignRunStatus(claimed.runId);
+  return {};
+}
+
+export async function handleCampaignWaitTask(
+  stepId: string
+): Promise<CampaignTaskResult> {
+  const step = await getCampaignRunStepById(stepId);
+  if (!step) {
+    return {};
+  }
+
+  const run = await getCampaignRunById(step.runId);
+  if (!run) {
+    await setCampaignRunStepFailed(step.id, "Campaign run not found");
+    return {};
+  }
+
+  if (
+    run.status === "failed" ||
+    run.status === "cancelled" ||
+    run.status === "completed"
+  ) {
+    return {};
+  }
+
+  await setCampaignRunStatus(run.id, "waiting", null);
+  await markCampaignRunHeartbeat(run.id);
+
+  if (!step.blockingSendJobId) {
+    await setCampaignRunStepPending({
+      stepId: step.id,
+      dueAt: new Date().toISOString(),
+      recipientEmails: step.recipientEmails,
+    });
+    await enqueueCampaignStepTask({
+      stepId: step.id,
+      workspaceId: run.workspaceId,
+    });
+    await syncCampaignRunStatus(run.id);
+    return {};
+  }
+
+  const job = await getSendJobStatusLite(step.blockingSendJobId);
+  if (
+    !job ||
+    !["completed", "failed", "cancelled"].includes(job.status.trim().toLowerCase())
+  ) {
+    return {
+      requeueAt: new Date(Date.now() + CAMPAIGN_WAIT_RETRY_MS).toISOString(),
+    };
+  }
+
+  const sentRecipients = await getSentRecipientsForSendJob(step.blockingSendJobId);
+  await setCampaignRunStepPending({
+    stepId: step.id,
+    dueAt: new Date().toISOString(),
+    recipientEmails: sentRecipients,
+  });
+  await enqueueCampaignStepTask({
+    stepId: step.id,
+    workspaceId: run.workspaceId,
+  });
+  await syncCampaignRunStatus(run.id);
+  return {};
 }
 
 export async function startCampaignRun(params: {
@@ -684,9 +760,14 @@ export async function startCampaignRun(params: {
     rootNodeIds.length > 0 ? rootNodeIds : [draft.nodes[0].id];
 
   for (const nodeId of initialNodeIds) {
-    await createCampaignRunStep({
+    const step = await createCampaignRunStep({
       runId: run.id,
       nodeId,
+    });
+    await enqueueCampaignStepTask({
+      stepId: step.id,
+      workspaceId: params.workspaceId,
+      dueAt: step.dueAt,
     });
   }
 
@@ -699,72 +780,22 @@ export async function startCampaignRun(params: {
 export async function processCampaignRuns(
   options: CampaignProcessOptions = {}
 ): Promise<CampaignRunProcessSummary> {
-  const summary: CampaignRunProcessSummary = {
-    waitingReleased: 0,
-    stepsClaimed: 0,
-    stepsCompleted: 0,
-    sendJobsCreated: 0,
+  const { processScheduledTasks } = await import("@/lib/task-processor");
+  const taskSummary = await processScheduledTasks({
+    maxTasks: Math.max(
+      normalizePositiveInteger(options.maxPendingSteps, 10),
+      normalizePositiveInteger(options.maxWaitingSteps, 10)
+    ),
+    kinds: ["campaign_step", "campaign_wait"],
+  });
+
+  return {
+    waitingReleased: taskSummary.campaignWaitsProcessed,
+    stepsClaimed: taskSummary.campaignStepsProcessed,
+    stepsCompleted: taskSummary.tasksCompleted,
+    sendJobsCreated: taskSummary.sendJobsDispatched,
     runsCompleted: 0,
-    runsFailed: 0,
-    errors: [],
+    runsFailed: taskSummary.tasksFailed,
+    errors: taskSummary.errors,
   };
-
-  const waitingSteps = await listWaitingCampaignRunSteps(
-    normalizePositiveInteger(options.maxWaitingSteps, 10)
-  );
-  for (const waitingStep of waitingSteps) {
-    try {
-      const released = await releaseWaitingStep(waitingStep);
-      if (released) {
-        summary.waitingReleased += 1;
-        const status = await syncCampaignRunStatus(waitingStep.runId);
-        if (status === "completed") {
-          summary.runsCompleted += 1;
-        } else if (status === "failed") {
-          summary.runsFailed += 1;
-        }
-      }
-    } catch (error) {
-      summary.errors.push(trimMessage(error));
-    }
-  }
-
-  const pendingSteps = await listPendingCampaignRunSteps(
-    new Date().toISOString(),
-    normalizePositiveInteger(options.maxPendingSteps, 10)
-  );
-
-  for (const pendingStep of pendingSteps) {
-    const claimed = await claimCampaignRunStep(pendingStep.id);
-    if (!claimed) {
-      continue;
-    }
-
-    summary.stepsClaimed += 1;
-    try {
-      await processClaimedStep(claimed, summary);
-      const status = await syncCampaignRunStatus(claimed.runId);
-      if (status === "completed") {
-        summary.runsCompleted += 1;
-      } else if (status === "failed") {
-        summary.runsFailed += 1;
-      }
-    } catch (error) {
-      const message = trimMessage(error);
-      summary.errors.push(message);
-      await setCampaignRunStepFailed(claimed.id, message).catch(() => {
-        // no-op
-      });
-      await failOpenCampaignRunSteps(claimed.runId, message).catch(() => {
-        // no-op
-      });
-      await setCampaignRunStatus(claimed.runId, "failed", message).catch(() => {
-        // no-op
-      });
-      summary.stepsCompleted += 1;
-      summary.runsFailed += 1;
-    }
-  }
-
-  return summary;
 }

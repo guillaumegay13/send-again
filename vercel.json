@@ -1,7 +1,7 @@
 {
   "crons": [
     {
-      "path": "/api/campaigns/process",
+      "path": "/api/tasks/process",
       "schedule": "* * * * *"
     }
   ]

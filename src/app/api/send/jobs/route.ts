@@ -24,6 +24,7 @@ function parseStatuses(value: string | null): SendJobStatus[] {
     .filter(Boolean);
 
   const allowed = new Set<SendJobStatus>([
+    "scheduled",
     "queued",
     "running",
     "completed",

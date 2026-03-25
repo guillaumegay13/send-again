@@ -89,12 +89,16 @@ export const openapiSpec = {
         properties: {
           id: { type: "string", format: "uuid" },
           workspaceId: { type: "string" },
-          status: { type: "string", enum: ["queued", "running", "completed", "failed", "cancelled"] },
+          status: {
+            type: "string",
+            enum: ["scheduled", "queued", "running", "completed", "failed", "cancelled"],
+          },
           total: { type: "integer" },
           sent: { type: "integer" },
           failed: { type: "integer" },
           dryRun: { type: "boolean" },
           createdAt: { type: "string", format: "date-time" },
+          scheduledFor: { type: ["string", "null"], format: "date-time" },
           startedAt: { type: ["string", "null"], format: "date-time" },
           completedAt: { type: ["string", "null"], format: "date-time" },
           heartbeatAt: { type: ["string", "null"], format: "date-time" },
@@ -566,6 +570,11 @@ export const openapiSpec = {
                   subject: { type: "string" },
                   html: { type: "string", description: "Email body HTML" },
                   dryRun: { type: "boolean", default: false, description: "If true, returns recipient count without sending" },
+                  sendAt: {
+                    type: "string",
+                    format: "date-time",
+                    description: "Optional future timestamp for scheduled delivery",
+                  },
                   configSet: { type: "string" },
                   rateLimit: { type: "integer" },
                   footerHtml: { type: "string" },
@@ -596,8 +605,15 @@ export const openapiSpec = {
                       description: "Job created",
                       properties: {
                         jobId: { type: "string", format: "uuid" },
-                        status: { type: "string", const: "queued" },
+                        status: {
+                          type: "string",
+                          enum: ["scheduled", "queued"],
+                        },
                         total: { type: "integer" },
+                        scheduledFor: {
+                          type: ["string", "null"],
+                          format: "date-time",
+                        },
                         skippedUnsubscribed: { type: "integer" },
                         dryRun: { type: "boolean", const: false },
                       },
@@ -650,7 +666,8 @@ export const openapiSpec = {
             name: "status",
             in: "query" as const,
             schema: { type: "string" },
-            description: "Comma-separated status filter: queued,running,completed,failed,cancelled",
+            description:
+              "Comma-separated status filter: scheduled,queued,running,completed,failed,cancelled",
           },
         ],
         responses: {

@@ -6,10 +6,10 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export async function GET(request: NextRequest) {
-  return handleBackgroundProcessGet(request);
+export async function GET(req: NextRequest) {
+  return handleBackgroundProcessGet(req);
 }
 
-export async function POST(request: NextRequest) {
-  return handleBackgroundProcessPost(request);
+export async function POST(req: NextRequest) {
+  return handleBackgroundProcessPost(req);
 }

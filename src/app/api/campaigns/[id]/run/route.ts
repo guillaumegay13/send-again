@@ -1,8 +1,8 @@
 import { after, NextRequest, NextResponse } from "next/server";
 import { getPreferredWorkspaceUserId } from "@/lib/db";
 import { isBillingUnlimitedForUser } from "@/lib/billing";
-import { processSendJobs } from "@/lib/send-job-processor";
-import { processCampaignRuns, startCampaignRun } from "@/lib/campaign-runtime";
+import { startCampaignRun } from "@/lib/campaign-runtime";
+import { drainBackgroundWork } from "@/lib/background-processors";
 import { apiErrorResponse, requireWorkspaceAuth } from "@/lib/auth";
 
 export async function POST(
@@ -62,11 +62,7 @@ export async function POST(
 
     after(async () => {
       try {
-        await processCampaignRuns({
-          maxPendingSteps: 10,
-          maxWaitingSteps: 10,
-        });
-        await processSendJobs();
+        await drainBackgroundWork(10);
       } catch (error) {
         console.error("Background campaign processing error:", error);
       }

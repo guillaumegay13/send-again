@@ -127,7 +127,8 @@ npm run build && npm start
 | `GET` | `/api/send/status?jobId=<id>` | Live job progress |
 | `GET` | `/api/send/jobs?workspace=<id>` | List send jobs |
 | `POST` | `/api/send/process` | Worker endpoint for send job processing |
-| `GET/POST` | `/api/campaigns/process` | Worker endpoint for campaign progression and send job processing |
+| `GET/POST` | `/api/tasks/process` | Canonical worker endpoint for scheduled task progression and send job processing |
+| `GET/POST` | `/api/campaigns/process` | Compatibility alias for `/api/tasks/process` |
 | `GET/POST/DELETE` | `/api/contacts` | List, import, or explicitly delete contacts |
 | `GET/DELETE` | `/api/contacts/[email]` | Get or delete a contact |
 | `GET/POST/DELETE` | `/api/keys` | Manage API keys |
@@ -156,11 +157,14 @@ To receive delivery/open/click/bounce/complaint events:
 
 ## Production Recommendations
 
-- On Vercel, use Vercel Cron to call `GET /api/campaigns/process` every minute
-- For non-Vercel workers, call `POST /api/campaigns/process` or `POST /api/send/process`
+- On Vercel, use Vercel Cron to call `GET /api/tasks/process` every minute
+- For non-Vercel workers, call `POST /api/tasks/process`
+- `POST /api/send/process` remains available when you explicitly want send-job-only processing
+- `GET/POST /api/campaigns/process` remains available as a compatibility alias
 - Set `CRON_SECRET` for Vercel Cron auth
 - Set `SEND_JOB_PROCESSOR_TOKEN` and pass it via `x-send-job-token` or `Authorization: Bearer ...` for external workers
 - Keep the inline fallback enabled unless you have a reliable external worker
+- `POST /api/send` also accepts an optional `sendAt` ISO timestamp for first-class scheduled sends
 
 ## Environment Variable Reference
 
@@ -192,7 +196,9 @@ To receive delivery/open/click/bounce/complaint events:
 | `SEND_JOB_MAX_JOBS` | No | `1` | Max jobs per invocation |
 | `SEND_JOB_STALE_MS` | No | `180000` | Reclaim stale jobs after this delay |
 | `SEND_JOB_STALE_RECIPIENT_MS` | No | `180000` | Retry stale recipients after this delay |
-| `CRON_SECRET` | No | — | Shared secret used by Vercel Cron via `Authorization: Bearer ...` for `GET /api/campaigns/process` |
+| `SCHEDULED_TASK_BATCH_SIZE` | No | `25` | Max scheduled tasks claimed per worker invocation |
+| `SCHEDULED_TASK_STALE_MS` | No | `180000` | Reclaim stale running scheduled tasks after this delay |
+| `CRON_SECRET` | No | — | Shared secret used by Vercel Cron via `Authorization: Bearer ...` for `GET /api/tasks/process` |
 | `SEND_JOB_PROCESSOR_TOKEN` | No | — | Shared secret for manual/background `POST` calls to the processor endpoints |
 | `SEND_JOB_AFTER_MAX_ITERATIONS` | No | `20` | Max processing loops via `after()` |
 | `SEND_JOB_STATUS_INLINE_PROCESS` | No | `true` | Let status endpoint process jobs inline |

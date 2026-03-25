@@ -547,6 +547,23 @@ export async function createCampaignRunStep(params: {
   return normalizeCampaignRunStepRow(row);
 }
 
+export async function getCampaignRunStepById(
+  stepId: string
+): Promise<CampaignRunStep | null> {
+  const db = getDb();
+  const { data, error } = await db
+    .from("campaign_run_steps")
+    .select(
+      "id, run_id, node_id, status, due_at, blocking_send_job_id, recipient_emails, error_message, created_at, started_at, completed_at, updated_at"
+    )
+    .eq("id", stepId)
+    .limit(1);
+  assertCampaignTable(error, "campaign_run_steps");
+  assertNoError(error, "Failed to read campaign run step");
+  const row = (data ?? [])[0] as CampaignRunStepRowRaw | undefined;
+  return row ? normalizeCampaignRunStepRow(row) : null;
+}
+
 export async function listPendingCampaignRunSteps(
   dueBeforeIso: string,
   limit = 25

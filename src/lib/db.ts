@@ -515,6 +515,17 @@ export async function deleteWorkspaceData(workspaceId: string): Promise<void> {
     assertNoError(sendsError, "Failed to delete workspace sends");
   }
 
+  const { error: scheduledTasksError } = await db
+    .from("scheduled_tasks")
+    .delete()
+    .eq("workspace_id", workspaceId);
+  if (!isMissingTableError(scheduledTasksError, "scheduled_tasks")) {
+    assertNoError(
+      scheduledTasksError,
+      "Failed to delete workspace scheduled tasks"
+    );
+  }
+
   const { error: sendJobsError } = await db
     .from("send_jobs")
     .delete()
@@ -1991,6 +2002,7 @@ export async function getCampaignPerformanceAnalytics(
 }
 
 export type SendJobStatus =
+  | "scheduled"
   | "queued"
   | "running"
   | "completed"
@@ -2029,6 +2041,7 @@ export interface SendJobProgress {
   batchSize: number;
   sendConcurrency: number;
   createdAt: string;
+  scheduledFor: string | null;
   startedAt: string | null;
   completedAt: string | null;
   heartbeatAt: string | null;
@@ -2048,6 +2061,7 @@ export interface SendJobSummary {
   failed: number;
   dryRun: boolean;
   createdAt: string;
+  scheduledFor: string | null;
   startedAt: string | null;
   completedAt: string | null;
   heartbeatAt: string | null;
@@ -2071,6 +2085,7 @@ interface SendJobRowRaw {
   send_concurrency: number;
   error_message: string | null;
   created_at: string;
+  scheduled_for: string | null;
   started_at: string | null;
   completed_at: string | null;
   heartbeat_at: string | null;
@@ -2140,6 +2155,7 @@ function normalizeSendJobPayload(value: unknown): SendJobPayload {
 }
 
 function normalizeSendJobStatus(value: string): SendJobStatus {
+  if (value === "scheduled") return "scheduled";
   if (value === "queued") return "queued";
   if (value === "running") return "running";
   if (value === "completed") return "completed";
@@ -2160,6 +2176,7 @@ function normalizeSendJobRow(row: SendJobRowRaw): SendJobPayload & {
   batchSize: number;
   sendConcurrency: number;
   createdAt: string;
+  scheduledFor: string | null;
   startedAt: string | null;
   completedAt: string | null;
   heartbeatAt: string | null;
@@ -2189,6 +2206,7 @@ function normalizeSendJobRow(row: SendJobRowRaw): SendJobPayload & {
     batchSize: normalizeNonNegativeInteger(row.batch_size, 50, 1),
     sendConcurrency: normalizeNonNegativeInteger(row.send_concurrency, 1, 1),
     createdAt: row.created_at,
+    scheduledFor: row.scheduled_for ?? null,
     startedAt: row.started_at,
     completedAt: row.completed_at,
     heartbeatAt: row.heartbeat_at,
@@ -2208,6 +2226,8 @@ export async function createSendJob(params: {
   campaignId?: string | null;
   campaignRunId?: string | null;
   campaignStepId?: string | null;
+  initialStatus?: "scheduled" | "queued";
+  scheduledFor?: string | null;
 }): Promise<string> {
   const db = getDb();
   const id = crypto.randomUUID();
@@ -2230,12 +2250,13 @@ export async function createSendJob(params: {
     id,
     workspace_id: params.payload.workspaceId,
     user_id: params.userId,
-    status: "queued",
+    status: params.initialStatus ?? "queued",
     total: normalizeNonNegativeInteger(params.totalRecipients, 0),
     sent: 0,
     failed: 0,
     dry_run: params.dryRun,
     payload,
+    scheduled_for: params.scheduledFor ?? null,
     campaign_id: params.campaignId ?? null,
     campaign_run_id: params.campaignRunId ?? null,
     campaign_step_id: params.campaignStepId ?? null,
@@ -2316,7 +2337,7 @@ export async function getSendJobForUser(
   const { data, error } = await db
     .from("send_jobs")
     .select(
-      "id, user_id, workspace_id, status, total, sent, failed, dry_run, payload, rate_limit, batch_size, send_concurrency, error_message, created_at, started_at, completed_at, heartbeat_at, updated_at"
+      "id, user_id, workspace_id, status, total, sent, failed, dry_run, payload, rate_limit, batch_size, send_concurrency, error_message, created_at, scheduled_for, started_at, completed_at, heartbeat_at, updated_at"
     )
     .eq("id", jobId)
     .eq("user_id", userId)
@@ -2337,7 +2358,7 @@ export async function getSendJobForWorkspace(
   const { data, error } = await db
     .from("send_jobs")
     .select(
-      "id, user_id, workspace_id, status, total, sent, failed, dry_run, payload, rate_limit, batch_size, send_concurrency, error_message, created_at, started_at, completed_at, heartbeat_at, updated_at"
+      "id, user_id, workspace_id, status, total, sent, failed, dry_run, payload, rate_limit, batch_size, send_concurrency, error_message, created_at, scheduled_for, started_at, completed_at, heartbeat_at, updated_at"
     )
     .eq("id", jobId)
     .eq("workspace_id", workspaceId)
@@ -2364,7 +2385,7 @@ export async function getSendJobsForUser(
   const query = db
     .from("send_jobs")
     .select(
-      "id, workspace_id, user_id, status, total, sent, failed, dry_run, payload, rate_limit, batch_size, send_concurrency, error_message, created_at, started_at, completed_at, heartbeat_at, updated_at"
+      "id, workspace_id, user_id, status, total, sent, failed, dry_run, payload, rate_limit, batch_size, send_concurrency, error_message, created_at, scheduled_for, started_at, completed_at, heartbeat_at, updated_at"
     )
     .eq("user_id", userId)
     .order("created_at", { ascending: false });
@@ -2394,7 +2415,7 @@ export async function getSendJobsForWorkspace(
   const query = db
     .from("send_jobs")
     .select(
-      "id, workspace_id, user_id, status, total, sent, failed, dry_run, payload, rate_limit, batch_size, send_concurrency, error_message, created_at, started_at, completed_at, heartbeat_at, updated_at"
+      "id, workspace_id, user_id, status, total, sent, failed, dry_run, payload, rate_limit, batch_size, send_concurrency, error_message, created_at, scheduled_for, started_at, completed_at, heartbeat_at, updated_at"
     )
     .eq("workspace_id", workspaceId)
     .order("created_at", { ascending: false });
@@ -2419,7 +2440,7 @@ export async function getQueuedOrRunningSendJobs(
   const { data, error } = await db
     .from("send_jobs")
     .select(
-      "id, workspace_id, user_id, status, total, sent, failed, dry_run, payload, rate_limit, batch_size, send_concurrency, error_message, created_at, started_at, completed_at, heartbeat_at, updated_at"
+      "id, workspace_id, user_id, status, total, sent, failed, dry_run, payload, rate_limit, batch_size, send_concurrency, error_message, created_at, scheduled_for, started_at, completed_at, heartbeat_at, updated_at"
     )
     .in("status", ["queued", "running"])
     .order("created_at", { ascending: true })
@@ -2510,6 +2531,7 @@ async function buildSendJobProgressFromRow(
     batchSize: normalized.batchSize,
     sendConcurrency: normalized.sendConcurrency,
     createdAt: normalized.createdAt,
+    scheduledFor: normalized.scheduledFor,
     startedAt: normalized.startedAt,
     completedAt: normalized.completedAt,
     heartbeatAt: normalized.heartbeatAt,
@@ -2533,6 +2555,7 @@ function mapSendJobSummaries(rows: SendJobRowRaw[]): SendJobSummary[] {
       failed: normalized.failed,
       dryRun: normalized.dryRun,
       createdAt: normalized.createdAt,
+      scheduledFor: normalized.scheduledFor,
       startedAt: normalized.startedAt,
       completedAt: normalized.completedAt,
       heartbeatAt: normalized.heartbeatAt,
@@ -2553,6 +2576,23 @@ export async function claimQueuedSendJob(jobId: string): Promise<boolean> {
     .eq("status", "queued")
     .select("id");
   assertNoError(error, "Failed to claim send job");
+  return (data ?? []).length > 0;
+}
+
+export async function activateScheduledSendJob(jobId: string): Promise<boolean> {
+  const now = new Date().toISOString();
+  const db = getDb();
+  const { data, error } = await db
+    .from("send_jobs")
+    .update({
+      status: "queued",
+      updated_at: now,
+      error_message: null,
+    })
+    .eq("id", jobId)
+    .eq("status", "scheduled")
+    .select("id");
+  assertNoError(error, "Failed to activate scheduled send job");
   return (data ?? []).length > 0;
 }
 
