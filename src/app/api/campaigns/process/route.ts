@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { processSendJobs } from "@/lib/send-job-processor";
+import { processCampaignRuns } from "@/lib/campaign-runtime";
 import { isProcessorAuthorized } from "@/lib/processor-auth";
 
 export const dynamic = "force-dynamic";
@@ -10,20 +11,18 @@ async function handleProcess(req: NextRequest) {
   }
 
   try {
-    const summary = await processSendJobs();
-    const errors = summary.errors.slice(0, 20);
+    const campaignSummary = await processCampaignRuns();
+    const sendSummary = await processSendJobs();
 
     return NextResponse.json({
       ok: true,
-      jobsClaimed: summary.jobsClaimed,
-      jobsCompleted: summary.jobsCompleted,
-      recipientsProcessed: summary.recipientsProcessed,
-      errors,
+      campaignSummary,
+      sendSummary,
     });
   } catch (error) {
     console.error(error);
     return NextResponse.json(
-      { ok: false, error: "Failed to process send jobs" },
+      { ok: false, error: "Failed to process campaigns" },
       { status: 500 }
     );
   }

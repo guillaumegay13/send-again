@@ -19,7 +19,7 @@ function requireEnv(name: string, value: string | undefined): string {
   return value;
 }
 
-function getDb(): SupabaseClient {
+export function getDb(): SupabaseClient {
   if (!globalDb.__supabaseDb) {
     const supabaseUrl = requireEnv(
       "SUPABASE_URL or NEXT_PUBLIC_SUPABASE_URL",
@@ -521,6 +521,49 @@ export async function deleteWorkspaceData(workspaceId: string): Promise<void> {
     .eq("workspace_id", workspaceId);
   if (!isMissingTableError(sendJobsError, "send_jobs")) {
     assertNoError(sendJobsError, "Failed to delete workspace send jobs");
+  }
+
+  const { data: campaignRunRows, error: campaignRunListError } = await db
+    .from("campaign_runs")
+    .select("id")
+    .eq("workspace_id", workspaceId);
+  if (!isMissingTableError(campaignRunListError, "campaign_runs")) {
+    assertNoError(campaignRunListError, "Failed to list workspace campaign runs");
+  }
+
+  const campaignRunIds = ((campaignRunRows ?? []) as Array<{ id: string }>)
+    .map((row) => String(row.id ?? "").trim())
+    .filter(Boolean);
+  if (campaignRunIds.length > 0) {
+    const { error: campaignRunStepsError } = await db
+      .from("campaign_run_steps")
+      .delete()
+      .in("run_id", campaignRunIds);
+    if (!isMissingTableError(campaignRunStepsError, "campaign_run_steps")) {
+      assertNoError(
+        campaignRunStepsError,
+        "Failed to delete workspace campaign run steps"
+      );
+    }
+  }
+
+  const { error: campaignRunsError } = await db
+    .from("campaign_runs")
+    .delete()
+    .eq("workspace_id", workspaceId);
+  if (!isMissingTableError(campaignRunsError, "campaign_runs")) {
+    assertNoError(campaignRunsError, "Failed to delete workspace campaign runs");
+  }
+
+  const { error: campaignWorkflowsError } = await db
+    .from("campaign_workflows")
+    .delete()
+    .eq("workspace_id", workspaceId);
+  if (!isMissingTableError(campaignWorkflowsError, "campaign_workflows")) {
+    assertNoError(
+      campaignWorkflowsError,
+      "Failed to delete workspace campaign workflows"
+    );
   }
 
   const { error: contactsError } = await db
@@ -2139,6 +2182,9 @@ export async function createSendJob(params: {
   batchSize: number;
   sendConcurrency: number;
   dryRun: boolean;
+  campaignId?: string | null;
+  campaignRunId?: string | null;
+  campaignStepId?: string | null;
 }): Promise<string> {
   const db = getDb();
   const id = crypto.randomUUID();
@@ -2167,6 +2213,9 @@ export async function createSendJob(params: {
     failed: 0,
     dry_run: params.dryRun,
     payload,
+    campaign_id: params.campaignId ?? null,
+    campaign_run_id: params.campaignRunId ?? null,
+    campaign_step_id: params.campaignStepId ?? null,
     rate_limit: normalizeNonNegativeInteger(
       params.rateLimit ?? params.payload.rateLimit,
       params.payload.rateLimit

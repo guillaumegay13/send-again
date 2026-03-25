@@ -15,7 +15,7 @@ import { getBrowserSupabaseClient } from "@/lib/supabase-browser";
 import { appendWorkspaceFooter } from "@/lib/email-footer";
 import { FancySelect } from "@/components/ui/fancy-select";
 import { AppSidebar } from "@/components/ui/app-sidebar";
-import { CampaignsShell } from "../campaigns/page";
+import { CampaignsShell } from "@/components/campaigns-shell";
 
 type Tab = "compose" | "contacts" | "history" | "settings" | "campaigns";
 type HistoryView = "activity" | "performance";
@@ -5659,7 +5659,11 @@ export default function ComposePage() {
 
         {tab === "campaigns" && (
           <div className="flex-1 min-w-0 overflow-y-auto bg-gray-100 text-gray-900">
-            <CampaignsShell embedded />
+            <CampaignsShell
+              key={activeId ?? "no-workspace"}
+              embedded
+              workspaceId={activeId}
+            />
           </div>
         )}
       </div>
