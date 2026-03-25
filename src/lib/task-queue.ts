@@ -156,6 +156,7 @@ export async function enqueueScheduledTask(params: {
     const { data: existingData, error: existingError } = await db
       .from("scheduled_tasks")
       .select(SCHEDULED_TASK_SELECT)
+      .eq("workspace_id", workspaceId)
       .eq("idempotency_key", idempotencyKey)
       .limit(1);
     assertTaskTable(existingError);

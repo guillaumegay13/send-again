@@ -57,6 +57,11 @@ function trimMessage(value: unknown): string {
   return text.replace(/\s+/g, " ").trim().slice(0, 1000);
 }
 
+function getRetryDueAtIso(attempts: number): string {
+  const backoffMs = Math.min(2 ** Math.max(1, attempts) * 1000, 60000);
+  return new Date(Date.now() + backoffMs).toISOString();
+}
+
 async function runScheduledTask(
   task: ScheduledTask
 ): Promise<ScheduledTaskHandlerResult> {
@@ -160,7 +165,7 @@ export async function processScheduledTasks(
       } else {
         await rescheduleScheduledTask({
           taskId: claimed.id,
-          dueAt: new Date().toISOString(),
+          dueAt: getRetryDueAtIso(claimed.attempts),
           errorMessage: message,
         }).catch(() => {
           // no-op

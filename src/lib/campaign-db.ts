@@ -635,15 +635,16 @@ export async function setCampaignRunStepPending(params: {
   recipientEmails?: string[];
 }): Promise<void> {
   const db = getDb();
+  const now = new Date().toISOString();
   const { error } = await db
     .from("campaign_run_steps")
     .update({
       status: "pending",
-      due_at: params.dueAt ?? new Date().toISOString(),
+      due_at: params.dueAt ?? now,
       recipient_emails: params.recipientEmails ?? [],
       blocking_send_job_id: null,
       error_message: null,
-      updated_at: new Date().toISOString(),
+      updated_at: now,
     })
     .eq("id", params.stepId);
   assertCampaignTable(error, "campaign_run_steps");

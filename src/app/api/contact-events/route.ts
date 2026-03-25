@@ -24,6 +24,18 @@ function normalizeMetadata(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
+function isIsoTimestamp(value: string): boolean {
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(
+      value
+    )
+  ) {
+    return false;
+  }
+
+  return !Number.isNaN(Date.parse(value));
+}
+
 export async function GET(req: NextRequest) {
   try {
     const workspaceId = normalizeWorkspaceId(
@@ -60,7 +72,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json().catch(() => ({}))) as {
+    let body: {
       workspaceId?: unknown;
       contactEmail?: unknown;
       eventType?: unknown;
@@ -73,6 +85,11 @@ export async function POST(req: NextRequest) {
       occurredAt?: unknown;
       idempotencyKey?: unknown;
     };
+    try {
+      body = (await req.json()) as typeof body;
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    }
 
     const workspaceId = normalizeWorkspaceId(body.workspaceId);
     if (!workspaceId) {
@@ -108,7 +125,7 @@ export async function POST(req: NextRequest) {
     }
 
     const occurredAt = normalizeOptionalString(body.occurredAt);
-    if (occurredAt && Number.isNaN(Date.parse(occurredAt))) {
+    if (occurredAt && !isIsoTimestamp(occurredAt)) {
       return NextResponse.json(
         { error: "occurredAt must be a valid ISO timestamp" },
         { status: 400 }

@@ -352,8 +352,10 @@ create index if not exists idx_workspace_memberships_user on workspace_membershi
 create index if not exists idx_send_jobs_status_created on send_jobs(status, created_at);
 create index if not exists idx_send_jobs_user on send_jobs(user_id, status, created_at);
 create index if not exists idx_send_jobs_scheduled on send_jobs(status, scheduled_for, created_at);
+create index if not exists idx_send_jobs_campaign_id on send_jobs(campaign_id);
 create index if not exists idx_send_job_recipients_job on send_job_recipients(job_id, status, id);
 create index if not exists idx_send_jobs_campaign_run on send_jobs(campaign_run_id, created_at desc);
+create index if not exists idx_send_jobs_campaign_step_id on send_jobs(campaign_step_id);
 create index if not exists idx_campaign_workflows_workspace on campaign_workflows(workspace_id, updated_at desc);
 create index if not exists idx_campaign_runs_workspace on campaign_runs(workspace_id, created_at desc);
 create index if not exists idx_campaign_runs_campaign on campaign_runs(campaign_id, created_at desc);
@@ -371,6 +373,14 @@ create index if not exists idx_contact_events_contact
   on contact_events(workspace_id, contact_email, event_type, occurred_at desc);
 create index if not exists idx_contact_events_message_id
   on contact_events(message_id);
+create index if not exists idx_contact_events_send_job_id
+  on contact_events(send_job_id);
+create index if not exists idx_contact_events_campaign_id
+  on contact_events(campaign_id);
+create index if not exists idx_contact_events_campaign_run_id
+  on contact_events(campaign_run_id);
+create index if not exists idx_contact_events_campaign_step_id
+  on contact_events(campaign_step_id);
 create unique index if not exists idx_contact_events_workspace_idempotency
   on contact_events(workspace_id, idempotency_key)
   where idempotency_key is not null;

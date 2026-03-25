@@ -778,7 +778,7 @@ export const openapiSpec = {
                   workspaceId: { type: "string" },
                   contactEmail: { type: "string", format: "email" },
                   eventType: { type: "string", example: "reply_received" },
-                  eventValue: { type: "string", nullable: true },
+                  eventValue: { type: ["string", "null"] },
                   messageId: { type: "string" },
                   source: { type: "string", default: "api" },
                   sourceRef: { type: "string" },

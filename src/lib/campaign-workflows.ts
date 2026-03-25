@@ -465,7 +465,6 @@ function legacyPredicatesToConditions(
   sendMetaByLegacyId: Map<string, { label: string; subject: string }>
 ): { matchMode: ConditionMatchMode; conditions: RecipientCondition[] } {
   const conditions: RecipientCondition[] = [];
-  let sawVerified = false;
 
   for (const rawPredicate of rawPredicates) {
     if (!rawPredicate || typeof rawPredicate !== "object") continue;
@@ -477,7 +476,6 @@ function legacyPredicatesToConditions(
       normalizeString(predicate.field) === "verified"
     ) {
       const value = normalizeString(predicate.value, "true");
-      sawVerified = true;
       conditions.push(
         makeFieldCondition("verified", value === "false" ? "false" : "true")
       );
@@ -491,10 +489,6 @@ function legacyPredicatesToConditions(
       if (!subject) continue;
       conditions.push(makeHistoryCondition(subject, "open", "exact"));
     }
-  }
-
-  if (conditions.length === 0 && sawVerified) {
-    conditions.push(makeFieldCondition("verified", "true"));
   }
 
   return {
@@ -766,7 +760,12 @@ export function sanitizeCampaignDraft(draft: CampaignDraft): CampaignDraft {
 }
 
 export function campaignListFromStorage(raw: string): SavedCampaign[] {
-  const parsed = JSON.parse(raw);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
   if (!Array.isArray(parsed)) return [];
 
   const list: SavedCampaign[] = [];

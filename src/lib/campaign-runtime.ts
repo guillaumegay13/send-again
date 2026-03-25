@@ -102,6 +102,16 @@ function normalizeNonNegativeInteger(value: unknown, fallback: number): number {
   return Math.max(0, Math.floor(parsed));
 }
 
+function trimMessage(value: unknown): string {
+  const text =
+    typeof value === "string"
+      ? value
+      : value instanceof Error
+      ? value.message
+      : "Campaign step failed";
+  return text.replace(/\s+/g, " ").trim().slice(0, 1000);
+}
+
 function normalizeFieldValue(
   fields: Record<string, string>,
   fieldName: string
@@ -661,8 +671,21 @@ export async function handleCampaignStepTask(
     return {};
   }
 
-  await processClaimedStep(claimed);
-  await syncCampaignRunStatus(claimed.runId);
+  try {
+    await processClaimedStep(claimed);
+    await syncCampaignRunStatus(claimed.runId);
+  } catch (error) {
+    const message = trimMessage(error);
+    await setCampaignRunStepFailed(claimed.id, message).catch(() => {
+      // no-op
+    });
+    await failOpenCampaignRunSteps(claimed.runId, message).catch(() => {
+      // no-op
+    });
+    await setCampaignRunStatus(claimed.runId, "failed", message).catch(() => {
+      // no-op
+    });
+  }
   return {};
 }
 

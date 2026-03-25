@@ -663,32 +663,41 @@ export function CampaignsShell({
   const updateDraft = useCallback(
     (updater: CampaignDraft | ((current: CampaignDraft) => CampaignDraft)) => {
       setDraft((current) => {
-        const nextDraft = sanitizeCampaignDraft(
+        return sanitizeCampaignDraft(
           typeof updater === "function"
             ? (updater as (current: CampaignDraft) => CampaignDraft)(current)
             : updater
         );
-        if (activeCampaignId) {
-          setCampaigns((currentCampaigns) =>
-            currentCampaigns.map((campaign) =>
-              campaign.campaignId === activeCampaignId
-                ? {
-                    ...campaign,
-                    ...nextDraft,
-                  }
-                : campaign
-            )
-          );
-        }
-        return nextDraft;
       });
       if (saveState !== "saving") {
         setSaveState("idle");
       }
       setSaveMessage(null);
     },
-    [activeCampaignId, saveState]
+    [saveState]
   );
+
+  useEffect(() => {
+    if (!activeCampaignId) {
+      return;
+    }
+
+    setCampaigns((currentCampaigns) => {
+      let found = false;
+      const nextCampaigns = currentCampaigns.map((campaign) => {
+        if (campaign.campaignId !== activeCampaignId) {
+          return campaign;
+        }
+        found = true;
+        return {
+          ...campaign,
+          ...draft,
+        };
+      });
+
+      return found ? nextCampaigns : currentCampaigns;
+    });
+  }, [activeCampaignId, draft]);
 
   const draftSnapshot = useMemo(() => snapshotCampaign(draft), [draft]);
   const hasUnsavedChanges =
