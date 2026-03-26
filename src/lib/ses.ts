@@ -221,7 +221,6 @@ export async function sendEmail({
 
   const cmd = new SendRawEmailCommand({
     RawMessage: { Data: new Uint8Array(Buffer.from(rawMessage)) },
-    Source: from,
     Destinations: [to],
     ConfigurationSetName: configSet,
   });
