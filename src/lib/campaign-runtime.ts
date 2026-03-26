@@ -42,6 +42,7 @@ import {
   type SendAudience,
   type WorkflowNode,
 } from "@/lib/campaign-workflows";
+import { normalizeHistorySubject } from "@/lib/history-subject";
 import { enqueueScheduledTask } from "@/lib/task-queue";
 
 interface CandidateContact {
@@ -153,8 +154,8 @@ function subjectMatchesHistoryCondition(
   subject: string,
   condition: HistoryCondition
 ): boolean {
-  const actual = subject.trim().toLowerCase();
-  const expected = condition.subject.trim().toLowerCase();
+  const actual = normalizeHistorySubject(subject);
+  const expected = normalizeHistorySubject(condition.subject);
   if (!expected) {
     return false;
   }

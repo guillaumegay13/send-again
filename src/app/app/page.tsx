@@ -13,6 +13,7 @@ import {
 } from "react";
 import { getBrowserSupabaseClient } from "@/lib/supabase-browser";
 import { appendWorkspaceFooter } from "@/lib/email-footer";
+import { normalizeHistorySubject } from "@/lib/history-subject";
 import { FancySelect } from "@/components/ui/fancy-select";
 import { AppSidebar } from "@/components/ui/app-sidebar";
 import { CampaignsShell } from "@/components/campaigns-shell";
@@ -634,7 +635,7 @@ function buildHistoryEventIndex(history: HistoryItem[]): HistoryEventIndex {
   const index: HistoryEventIndex = new Map();
 
   for (const item of history) {
-    const subject = item.subject.trim().toLowerCase();
+    const subject = normalizeHistorySubject(item.subject);
     if (!subject || !item.recipient) continue;
     const emailKey = item.recipient.toLowerCase();
 
@@ -695,7 +696,7 @@ function evaluateHistoryCondition(
   index: HistoryEventIndex
 ): boolean {
   const email = contact.email.toLowerCase();
-  const needle = condition.subject.trim().toLowerCase();
+  const needle = normalizeHistorySubject(condition.subject);
   if (!needle) return false;
 
   const subjectMap = index.get(condition.eventType);
