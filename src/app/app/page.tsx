@@ -135,6 +135,7 @@ const HISTORY_TABLE_PAGE_SIZE = 25;
 const CONTACTS_TABLE_PAGE_SIZE = 200;
 const CONTACT_IMPORT_BATCH_SIZE = 1000;
 const NAMECHEAP_DNS_STORAGE_KEY = "send-again.namecheap-dns";
+const ACTIVE_WORKSPACE_STORAGE_KEY = "send-again.active-workspaces";
 const LEGAL_ACCEPTANCE_VERSION = "2026-03-06";
 const API_KEY_SCOPE_OPTIONS: Array<{ value: ApiKeyScope; label: string }> = [
   { value: "contacts.read", label: "Contacts read" },
@@ -373,6 +374,67 @@ function loadPersistedDnsSetupState(): Partial<NamecheapDnsConfig> & {
     };
   } catch {
     return {};
+  }
+}
+
+function loadPersistedActiveWorkspace(userEmail: string | null): string | null {
+  if (typeof window === "undefined" || !userEmail) return null;
+
+  try {
+    const raw = window.localStorage.getItem(ACTIVE_WORKSPACE_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+
+    const persisted = (parsed as Record<string, unknown>)[
+      userEmail.trim().toLowerCase()
+    ];
+    if (typeof persisted !== "string") return null;
+
+    const normalized = persisted.trim().toLowerCase();
+    return normalized || null;
+  } catch {
+    return null;
+  }
+}
+
+function persistActiveWorkspace(
+  userEmail: string | null,
+  workspaceId: string | null
+) {
+  if (typeof window === "undefined" || !userEmail) return;
+
+  try {
+    const emailKey = userEmail.trim().toLowerCase();
+    const raw = window.localStorage.getItem(ACTIVE_WORKSPACE_STORAGE_KEY);
+    const parsed =
+      raw && raw.trim()
+        ? (JSON.parse(raw) as unknown)
+        : ({} as Record<string, unknown>);
+    const next =
+      parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? { ...(parsed as Record<string, unknown>) }
+        : {};
+
+    if (workspaceId) {
+      next[emailKey] = workspaceId.trim().toLowerCase();
+    } else {
+      delete next[emailKey];
+    }
+
+    if (Object.keys(next).length === 0) {
+      window.localStorage.removeItem(ACTIVE_WORKSPACE_STORAGE_KEY);
+      return;
+    }
+
+    window.localStorage.setItem(
+      ACTIVE_WORKSPACE_STORAGE_KEY,
+      JSON.stringify(next)
+    );
+  } catch {
+    // Ignore local storage failures and keep selection in memory.
   }
 }
 
@@ -1688,6 +1750,7 @@ export default function ComposePage() {
           contactSourceProvider: workspace.contactSourceProvider ?? "manual",
           contactSourceConfig: workspace.contactSourceConfig ?? {},
         }));
+        const persistedWorkspaceId = loadPersistedActiveWorkspace(userEmail);
         setWorkspaces(normalized);
         setActiveId((current) => {
           if (
@@ -1695,6 +1758,12 @@ export default function ComposePage() {
             normalized.some((workspace) => workspace.id === current)
           ) {
             return current;
+          }
+          if (
+            persistedWorkspaceId &&
+            normalized.some((workspace) => workspace.id === persistedWorkspaceId)
+          ) {
+            return persistedWorkspaceId;
           }
           return normalized[0]?.id ?? null;
         });
@@ -1706,7 +1775,12 @@ export default function ComposePage() {
         setActiveId(null);
       })
       .finally(() => setLoading(false));
-  }, [sessionToken, fetchJson]);
+  }, [sessionToken, userEmail, fetchJson]);
+
+  useEffect(() => {
+    if (!sessionToken) return;
+    persistActiveWorkspace(userEmail, activeId);
+  }, [sessionToken, userEmail, activeId]);
 
   useEffect(() => {
     activeWorkspaceIdRef.current = activeId;
