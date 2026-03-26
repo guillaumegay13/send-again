@@ -1697,6 +1697,10 @@ export default function ComposePage() {
   }, []);
 
   useEffect(() => {
+    if (authLoading) {
+      return;
+    }
+
     if (!sessionToken) {
       setLoading(false);
       setWorkspaces([]);
@@ -1740,6 +1744,10 @@ export default function ComposePage() {
       return;
     }
 
+    if (!userEmail) {
+      return;
+    }
+
     setLoading(true);
     setAuthError(null);
     fetchJson<Workspace[]>("/api/workspaces")
@@ -1754,16 +1762,16 @@ export default function ComposePage() {
         setWorkspaces(normalized);
         setActiveId((current) => {
           if (
-            current &&
-            normalized.some((workspace) => workspace.id === current)
-          ) {
-            return current;
-          }
-          if (
             persistedWorkspaceId &&
             normalized.some((workspace) => workspace.id === persistedWorkspaceId)
           ) {
             return persistedWorkspaceId;
+          }
+          if (
+            current &&
+            normalized.some((workspace) => workspace.id === current)
+          ) {
+            return current;
           }
           return normalized[0]?.id ?? null;
         });
@@ -1775,10 +1783,10 @@ export default function ComposePage() {
         setActiveId(null);
       })
       .finally(() => setLoading(false));
-  }, [sessionToken, userEmail, fetchJson]);
+  }, [authLoading, sessionToken, userEmail, fetchJson]);
 
   useEffect(() => {
-    if (!sessionToken) return;
+    if (!sessionToken || !userEmail) return;
     persistActiveWorkspace(userEmail, activeId);
   }, [sessionToken, userEmail, activeId]);
 
