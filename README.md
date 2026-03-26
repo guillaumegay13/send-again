@@ -129,7 +129,7 @@ npm run build && npm start
 | `POST` | `/api/send/process` | Worker endpoint for send job processing |
 | `GET/POST` | `/api/tasks/process` | Canonical worker endpoint for scheduled task progression and send job processing |
 | `GET/POST` | `/api/campaigns/process` | Compatibility alias for `/api/tasks/process` |
-| `GET/POST` | `/api/contact-events` | Read or ingest normalized contact and reply events |
+| `GET/POST` | `/api/contact-events` | Read or ingest normalized contact events |
 | `GET/POST/DELETE` | `/api/contacts` | List, import, or explicitly delete contacts |
 | `GET/DELETE` | `/api/contacts/[email]` | Get or delete a contact |
 | `GET/POST/DELETE` | `/api/keys` | Manage API keys |
