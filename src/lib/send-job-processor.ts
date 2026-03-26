@@ -1,9 +1,5 @@
 import { sendEmail } from "@/lib/ses";
 import { appendWorkspaceFooter } from "@/lib/email-footer";
-import {
-  appendOpenTrackingPixel,
-  buildOpenTrackingUrl,
-} from "@/lib/open-tracking";
 import { buildUnsubscribeUrl } from "@/lib/unsubscribe";
 import { isBillingEnforced } from "@/lib/billing";
 import {
@@ -312,13 +308,6 @@ async function processSendJob(
             workspaceId: context.workspaceId,
             unsubscribeUrl,
           });
-          const trackedHtml = appendOpenTrackingPixel({
-            html,
-            trackingUrl: buildOpenTrackingUrl({
-              baseUrl: context.payload.baseUrl,
-              recipientId: recipient.id,
-            }),
-          });
 
           try {
             const result = await sendEmail({
@@ -326,7 +315,7 @@ async function processSendJob(
               fromName: context.payload.fromName,
               to: recipient.recipient,
               subject,
-              html: trackedHtml,
+              html,
               configSet: context.payload.configSet,
               unsubscribeUrl,
             });
