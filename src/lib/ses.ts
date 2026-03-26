@@ -105,7 +105,7 @@ export async function configurationSetExists(name: string): Promise<boolean> {
   }
 }
 
-function formatSourceAddress(from: string, fromName?: string): string {
+function formatFromHeader(from: string, fromName?: string): string {
   const normalizedName = (fromName ?? "")
     .replace(/[\r\n]+/g, " ")
     .replace(/\s+/g, " ")
@@ -113,10 +113,12 @@ function formatSourceAddress(from: string, fromName?: string): string {
 
   if (!normalizedName) return from;
 
-  const escapedName = normalizedName
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"');
-  return `"${escapedName}" <${from}>`;
+  const isAscii = /^[\x20-\x7E]+$/.test(normalizedName);
+  const displayName = isAscii
+    ? `"${normalizedName.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
+    : `=?UTF-8?B?${Buffer.from(normalizedName, "utf8").toString("base64")}?=`;
+
+  return `${displayName} <${from}>`;
 }
 
 function htmlToPlainText(html: string): string {
@@ -139,14 +141,14 @@ function htmlToPlainText(html: string): string {
 }
 
 function buildRawMessage({
-  from,
+  fromHeader,
   to,
   subject,
   html,
   plainText,
   unsubscribeUrl,
 }: {
-  from: string;
+  fromHeader: string;
   to: string;
   subject: string;
   html: string;
@@ -159,7 +161,7 @@ function buildRawMessage({
   const encodedSubject = `=?UTF-8?B?${Buffer.from(subject).toString("base64")}?=`;
 
   const headers = [
-    `From: ${from}`,
+    `From: ${fromHeader}`,
     `To: ${to}`,
     `Subject: ${encodedSubject}`,
     `MIME-Version: 1.0`,
@@ -206,10 +208,10 @@ export async function sendEmail({
   unsubscribeUrl?: string;
 }) {
   const plainText = htmlToPlainText(html);
-  const source = formatSourceAddress(from, fromName);
+  const fromHeader = formatFromHeader(from, fromName);
 
   const rawMessage = buildRawMessage({
-    from: source,
+    fromHeader,
     to,
     subject,
     html,
@@ -219,7 +221,7 @@ export async function sendEmail({
 
   const cmd = new SendRawEmailCommand({
     RawMessage: { Data: new Uint8Array(Buffer.from(rawMessage)) },
-    Source: source,
+    Source: from,
     Destinations: [to],
     ConfigurationSetName: configSet,
   });
