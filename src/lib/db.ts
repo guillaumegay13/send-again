@@ -1377,6 +1377,15 @@ export interface SendHistoryPage {
   pageSize: number;
 }
 
+export interface ReusableSendTemplate {
+  jobId: string;
+  subject: string;
+  html: string;
+  from: string;
+  fromName: string;
+  createdAt: string;
+}
+
 export interface TopicDeliveryAnalytics {
   topic: string;
   totalSends: number;
@@ -1570,6 +1579,69 @@ export async function getSendHistory(
     total,
     page,
     pageSize,
+  };
+}
+
+export async function getReusableSendTemplate(
+  workspaceId: string,
+  messageId: string
+): Promise<ReusableSendTemplate | null> {
+  const normalizedWorkspaceId = String(workspaceId ?? "").trim().toLowerCase();
+  const normalizedMessageId = String(messageId ?? "").trim();
+  if (!normalizedWorkspaceId || !normalizedMessageId) {
+    return null;
+  }
+
+  const db = getDb();
+  const { data: recipientRows, error: recipientError } = await db
+    .from("send_job_recipients")
+    .select("job_id")
+    .eq("message_id", normalizedMessageId)
+    .limit(1);
+  assertNoError(recipientError, "Failed to load reusable send recipient");
+
+  const recipientRow = (recipientRows ?? [])[0] as { job_id: string } | undefined;
+  const jobId = String(recipientRow?.job_id ?? "").trim();
+  if (!jobId) {
+    return null;
+  }
+
+  const { data: jobRows, error: jobError } = await db
+    .from("send_jobs")
+    .select("id, payload, created_at")
+    .eq("id", jobId)
+    .eq("workspace_id", normalizedWorkspaceId)
+    .limit(1);
+  assertNoError(jobError, "Failed to load reusable send template");
+
+  const jobRow = (jobRows ?? [])[0] as
+    | {
+        id: string;
+        payload: unknown;
+        created_at: string;
+      }
+    | undefined;
+  if (!jobRow) {
+    return null;
+  }
+
+  const payload =
+    jobRow.payload && typeof jobRow.payload === "object" && !Array.isArray(jobRow.payload)
+      ? (jobRow.payload as Record<string, unknown>)
+      : {};
+
+  const html = String(payload.html ?? "").trim();
+  if (!html) {
+    return null;
+  }
+
+  return {
+    jobId: jobRow.id,
+    subject: String(payload.subject ?? "").trim(),
+    html,
+    from: String(payload.from ?? "").trim(),
+    fromName: String(payload.fromName ?? "").trim(),
+    createdAt: jobRow.created_at,
   };
 }
 

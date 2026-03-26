@@ -89,6 +89,15 @@ interface HistoryListResponse {
   hasMore: boolean;
 }
 
+interface ReusableSendTemplateResponse {
+  jobId: string;
+  subject: string;
+  html: string;
+  from: string;
+  fromName: string;
+  createdAt: string;
+}
+
 interface SubjectCampaignMetric {
   subject: string;
   totalSends: number;
@@ -1487,6 +1496,11 @@ export default function ComposePage() {
   const [historySearch, setHistorySearch] = useState("");
   const [historySearchInput, setHistorySearchInput] = useState("");
   const [historyReloadKey, setHistoryReloadKey] = useState(0);
+  const [historyActionMessage, setHistoryActionMessage] = useState<string | null>(
+    null
+  );
+  const [historyReuseLoadingMessageId, setHistoryReuseLoadingMessageId] =
+    useState<string | null>(null);
   const [historyView, setHistoryView] = useState<HistoryView>("activity");
   const [subjectMetrics, setSubjectMetrics] = useState<SubjectCampaignMetric[]>(
     []
@@ -3518,6 +3532,48 @@ export default function ComposePage() {
     }
   }
 
+  async function reuseHistoryItem(item: HistoryItem) {
+    if (!activeId) {
+      setHistoryActionMessage("Select a workspace first.");
+      return;
+    }
+
+    setHistoryReuseLoadingMessageId(item.messageId);
+    setHistoryActionMessage(null);
+
+    try {
+      const params = new URLSearchParams({
+        workspace: activeId,
+        messageId: item.messageId,
+      });
+      const template = await fetchJson<ReusableSendTemplateResponse>(
+        `/api/history/template?${params.toString()}`
+      );
+
+      setSubject(template.subject);
+      setHtml(template.html);
+      setTo("");
+      setRecipientConditions([]);
+      setConditionMatchMode("all");
+      setDryRun(true);
+      setResult(
+        "Loaded subject and HTML from history. Recipients were cleared and dry run was enabled."
+      );
+      setHistoryActionMessage(
+        `Loaded "${template.subject || "(No subject)"}" into Compose.`
+      );
+      setTab("compose");
+    } catch (error) {
+      setHistoryActionMessage(
+        error instanceof Error ? error.message : "Failed to load email template."
+      );
+    } finally {
+      setHistoryReuseLoadingMessageId((current) =>
+        current === item.messageId ? null : current
+      );
+    }
+  }
+
   if (authLoading) {
     return (
       <div className="flex h-screen items-center justify-center text-gray-400 text-sm">
@@ -4902,6 +4958,9 @@ export default function ComposePage() {
                             <th className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
                               Status
                             </th>
+                            <th className="w-28 px-3 py-2 text-right text-xs font-medium uppercase tracking-wider text-gray-500">
+                              Actions
+                            </th>
                           </tr>
                         </thead>
                         <tbody>
@@ -4956,12 +5015,27 @@ export default function ComposePage() {
                                     </p>
                                   )}
                                 </td>
+                                <td className="px-3 py-2 text-right">
+                                  <button
+                                    type="button"
+                                    onClick={() => reuseHistoryItem(item)}
+                                    disabled={historyReuseLoadingMessageId === item.messageId}
+                                    className="rounded border border-gray-200 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    {historyReuseLoadingMessageId === item.messageId
+                                      ? "Loading..."
+                                      : "Reuse"}
+                                  </button>
+                                </td>
                               </tr>
                             );
                           })}
                         </tbody>
                       </table>
                     </div>
+                    {historyActionMessage && (
+                      <p className="mt-3 text-sm text-gray-600">{historyActionMessage}</p>
+                    )}
                     <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500">
                       <p>
                         Showing {historyRangeStart}-{historyRangeEnd} of {historyTotal}
