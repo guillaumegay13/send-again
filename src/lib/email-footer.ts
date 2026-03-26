@@ -34,8 +34,8 @@ function buildSendAgainFooter(): string {
   const sendAgainLabel = "send-again.com";
 
   return [
-    "<p style=\"margin:12px 0 0 0;font-size:12px;line-height:1.5;color:#6b7280;\">",
-    `sent with <a href="${escapedSendAgainUrl}" style="color:#2563eb;">${sendAgainLabel}</a>`,
+    "<p style=\"margin:14px 0 0 0;font-size:11px;line-height:1.5;color:#9ca3af;text-align:right;\">",
+    `sent with <a href="${escapedSendAgainUrl}" style="color:inherit;font-weight:600;text-decoration:underline;">${sendAgainLabel}</a>`,
     "</p>",
   ].join("");
 }

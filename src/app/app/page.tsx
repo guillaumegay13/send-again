@@ -136,6 +136,7 @@ const CONTACTS_TABLE_PAGE_SIZE = 200;
 const CONTACT_IMPORT_BATCH_SIZE = 1000;
 const NAMECHEAP_DNS_STORAGE_KEY = "send-again.namecheap-dns";
 const ACTIVE_WORKSPACE_STORAGE_KEY = "send-again.active-workspaces";
+const ACTIVE_WORKSPACE_TAB_STORAGE_KEY = "send-again.active-workspace-tabs";
 const LEGAL_ACCEPTANCE_VERSION = "2026-03-06";
 const API_KEY_SCOPE_OPTIONS: Array<{ value: ApiKeyScope; label: string }> = [
   { value: "contacts.read", label: "Contacts read" },
@@ -382,6 +383,23 @@ function normalizeWorkspaceSelection(value: string | null | undefined): string |
   return normalized || null;
 }
 
+function normalizeTabSelection(value: string | null | undefined): Tab | null {
+  switch (value?.trim().toLowerCase()) {
+    case "compose":
+      return "compose";
+    case "contacts":
+      return "contacts";
+    case "history":
+      return "history";
+    case "settings":
+      return "settings";
+    case "campaigns":
+      return "campaigns";
+    default:
+      return null;
+  }
+}
+
 function loadPersistedActiveWorkspace(userEmail: string | null): string | null {
   if (typeof window === "undefined" || !userEmail) return null;
 
@@ -399,6 +417,34 @@ function loadPersistedActiveWorkspace(userEmail: string | null): string | null {
     if (typeof persisted !== "string") return null;
 
     return normalizeWorkspaceSelection(persisted);
+  } catch {
+    return null;
+  }
+}
+
+function loadPersistedWorkspaceTab(
+  userEmail: string | null,
+  workspaceId: string | null
+): Tab | null {
+  if (typeof window === "undefined" || !userEmail || !workspaceId) return null;
+
+  try {
+    const raw = window.localStorage.getItem(ACTIVE_WORKSPACE_TAB_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+
+    const emailKey = userEmail.trim().toLowerCase();
+    const workspaceKey = workspaceId.trim().toLowerCase();
+    const persisted = (parsed as Record<string, unknown>)[
+      `${emailKey}:${workspaceKey}`
+    ];
+
+    return typeof persisted === "string"
+      ? normalizeTabSelection(persisted)
+      : null;
   } catch {
     return null;
   }
@@ -442,12 +488,66 @@ function persistActiveWorkspace(
   }
 }
 
+function persistWorkspaceTab(
+  userEmail: string | null,
+  workspaceId: string | null,
+  tab: Tab | null
+) {
+  if (typeof window === "undefined" || !userEmail || !workspaceId) return;
+
+  try {
+    const emailKey = userEmail.trim().toLowerCase();
+    const workspaceKey = workspaceId.trim().toLowerCase();
+    const raw = window.localStorage.getItem(ACTIVE_WORKSPACE_TAB_STORAGE_KEY);
+    const parsed =
+      raw && raw.trim()
+        ? (JSON.parse(raw) as unknown)
+        : ({} as Record<string, unknown>);
+    const next =
+      parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? { ...(parsed as Record<string, unknown>) }
+        : {};
+    const storageKey = `${emailKey}:${workspaceKey}`;
+    const normalizedTab = normalizeTabSelection(tab);
+
+    if (normalizedTab) {
+      next[storageKey] = normalizedTab;
+    } else {
+      delete next[storageKey];
+    }
+
+    if (Object.keys(next).length === 0) {
+      window.localStorage.removeItem(ACTIVE_WORKSPACE_TAB_STORAGE_KEY);
+      return;
+    }
+
+    window.localStorage.setItem(
+      ACTIVE_WORKSPACE_TAB_STORAGE_KEY,
+      JSON.stringify(next)
+    );
+  } catch {
+    // Ignore local storage failures and keep selection in memory.
+  }
+}
+
 function loadWorkspaceFromUrl(): string | null {
   if (typeof window === "undefined") return null;
 
   try {
     return normalizeWorkspaceSelection(
       new URL(window.location.href).searchParams.get("workspace")
+    );
+  } catch {
+    return null;
+  }
+}
+
+function loadTabFromUrl(): Tab | null {
+  if (typeof window === "undefined") return null;
+
+  try {
+    return normalizeTabSelection(
+      new URL(window.location.href).searchParams.get("tab")
     );
   } catch {
     return null;
@@ -465,6 +565,30 @@ function persistWorkspaceToUrl(workspaceId: string | null) {
       url.searchParams.set("workspace", normalizedWorkspaceId);
     } else {
       url.searchParams.delete("workspace");
+    }
+
+    const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+    const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+
+    if (nextUrl !== currentUrl) {
+      window.history.replaceState(window.history.state, "", nextUrl);
+    }
+  } catch {
+    // Ignore URL persistence failures and keep selection in memory.
+  }
+}
+
+function persistTabToUrl(tab: Tab | null) {
+  if (typeof window === "undefined") return;
+
+  try {
+    const url = new URL(window.location.href);
+    const normalizedTab = normalizeTabSelection(tab);
+
+    if (normalizedTab) {
+      url.searchParams.set("tab", normalizedTab);
+    } else {
+      url.searchParams.delete("tab");
     }
 
     const nextUrl = `${url.pathname}${url.search}${url.hash}`;
@@ -1803,27 +1927,32 @@ export default function ComposePage() {
         }));
         const requestedWorkspaceId = loadWorkspaceFromUrl();
         const persistedWorkspaceId = loadPersistedActiveWorkspace(userEmail);
+        const requestedTab = loadTabFromUrl();
         setWorkspaces(normalized);
-        setActiveId((current) => {
-          if (
-            current &&
-            normalized.some((workspace) => workspace.id === current)
-          ) {
-            return current;
-          }
-          if (
-            requestedWorkspaceId &&
+        setActiveId((currentWorkspaceId) => {
+          const nextWorkspaceId =
+            (currentWorkspaceId &&
+            normalized.some((workspace) => workspace.id === currentWorkspaceId)
+              ? currentWorkspaceId
+              : null) ??
+            (requestedWorkspaceId &&
             normalized.some((workspace) => workspace.id === requestedWorkspaceId)
-          ) {
-            return requestedWorkspaceId;
-          }
-          if (
-            persistedWorkspaceId &&
+              ? requestedWorkspaceId
+              : null) ??
+            (persistedWorkspaceId &&
             normalized.some((workspace) => workspace.id === persistedWorkspaceId)
-          ) {
-            return persistedWorkspaceId;
-          }
-          return normalized[0]?.id ?? null;
+              ? persistedWorkspaceId
+              : null) ??
+            normalized[0]?.id ??
+            null;
+
+          const persistedTab = loadPersistedWorkspaceTab(
+            userEmail,
+            nextWorkspaceId
+          );
+          setTab((currentTab) => requestedTab ?? persistedTab ?? currentTab);
+
+          return nextWorkspaceId;
         });
         setHasLoadedWorkspaceList(true);
       })
@@ -1839,8 +1968,12 @@ export default function ComposePage() {
   useEffect(() => {
     if (!sessionToken || !userEmail || !hasLoadedWorkspaceList) return;
     persistActiveWorkspace(userEmail, activeId);
+    if (activeId) {
+      persistWorkspaceTab(userEmail, activeId, tab);
+    }
     persistWorkspaceToUrl(activeId);
-  }, [sessionToken, userEmail, activeId, hasLoadedWorkspaceList]);
+    persistTabToUrl(activeId ? tab : null);
+  }, [sessionToken, userEmail, activeId, tab, hasLoadedWorkspaceList]);
 
   useEffect(() => {
     activeWorkspaceIdRef.current = activeId;
