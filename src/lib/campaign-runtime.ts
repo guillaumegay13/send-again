@@ -294,32 +294,6 @@ async function loadRecipientHistory(
       }
       eventsByMessageId.set(messageId, events);
     }
-
-    const { data: contactEventData, error: contactEventError } = await db
-      .from("contact_events")
-      .select("message_id, event_type")
-      .eq("workspace_id", workspaceId)
-      .in("message_id", chunk)
-      .in("event_type", ["reply_received"]);
-    if (contactEventError) {
-      throw new Error(
-        `Failed to fetch campaign history contact events: ${contactEventError.message}`
-      );
-    }
-
-    for (const row of (contactEventData ?? []) as Array<{
-      message_id: string | null;
-      event_type: string | null;
-    }>) {
-      const messageId = String(row.message_id ?? "").trim();
-      if (!messageId) continue;
-      const events = eventsByMessageId.get(messageId) ?? new Set<string>();
-      const eventType = String(row.event_type ?? "").trim().toLowerCase();
-      if (eventType === "reply_received") {
-        events.add("reply");
-      }
-      eventsByMessageId.set(messageId, events);
-    }
   }
 
   for (const [messageId, send] of sendsByMessageId.entries()) {

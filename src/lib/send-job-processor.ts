@@ -4,7 +4,6 @@ import {
   appendOpenTrackingPixel,
   buildOpenTrackingUrl,
 } from "@/lib/open-tracking";
-import { buildReplyTrackingAddress } from "@/lib/reply-tracking";
 import { buildUnsubscribeUrl } from "@/lib/unsubscribe";
 import { isBillingEnforced } from "@/lib/billing";
 import {
@@ -320,7 +319,6 @@ async function processSendJob(
               recipientId: recipient.id,
             }),
           });
-          const replyTo = buildReplyTrackingAddress(recipient.id);
 
           try {
             const result = await sendEmail({
@@ -331,7 +329,6 @@ async function processSendJob(
               html: trackedHtml,
               configSet: context.payload.configSet,
               unsubscribeUrl,
-              replyTo: replyTo ?? undefined,
             });
 
             const messageId = result.MessageId ?? null;

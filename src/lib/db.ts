@@ -1785,14 +1785,6 @@ interface EventRow {
   detail: string | null;
 }
 
-interface ContactHistoryEventRow {
-  message_id: string | null;
-  event_type: string | null;
-  event_value: string | null;
-  occurred_at: string;
-  detail: string | null;
-}
-
 const MESSAGE_ID_IN_QUERY_CHUNK_SIZE = 50;
 
 function normalizeHistoryPage(value: unknown): number {
@@ -1895,18 +1887,8 @@ export async function getSendHistory(
     .in("message_id", messageIds)
     .order("timestamp", { ascending: true });
   assertNoError(eventsError, "Failed to fetch send events");
-  const { data: contactEventData, error: contactEventsError } = await db
-    .from("contact_events")
-    .select("message_id, event_type, event_value, occurred_at, detail")
-    .eq("workspace_id", workspaceId)
-    .in("message_id", messageIds)
-    .in("event_type", ["reply_received"])
-    .order("occurred_at", { ascending: true });
-  assertContactEventsTable(contactEventsError);
-  assertNoError(contactEventsError, "Failed to fetch contact events for history");
 
   const eventRows = (eventData ?? []) as EventRow[];
-  const contactEventRows = (contactEventData ?? []) as ContactHistoryEventRow[];
   const eventsByMessageId = new Map<
     string,
     Array<{ type: string; timestamp: string; detail: string }>
@@ -1920,21 +1902,6 @@ export async function getSendHistory(
       detail: row.detail ?? "",
     });
     eventsByMessageId.set(row.message_id, list);
-  }
-
-  for (const row of contactEventRows) {
-    const messageId = String(row.message_id ?? "").trim();
-    if (!messageId) continue;
-    const eventType = normalizeContactEventType(row.event_type);
-    if (eventType !== "reply_received") continue;
-    const list = eventsByMessageId.get(messageId) ?? [];
-    const detail = String(row.detail ?? row.event_value ?? "").trim();
-    list.push({
-      type: "Reply",
-      timestamp: row.occurred_at,
-      detail,
-    });
-    eventsByMessageId.set(messageId, list);
   }
 
   return {
@@ -3106,68 +3073,6 @@ export async function getSendJobRecipientMessageId(
   const row = (data ?? [])[0] as { message_id: string | null } | undefined;
   const messageId = String(row?.message_id ?? "").trim();
   return messageId || null;
-}
-
-export interface SendJobRecipientTracking {
-  id: number;
-  jobId: string;
-  workspaceId: string;
-  recipient: string;
-  messageId: string | null;
-}
-
-export async function getSendJobRecipientTracking(
-  id: number
-): Promise<SendJobRecipientTracking | null> {
-  if (!Number.isSafeInteger(id) || id <= 0) {
-    return null;
-  }
-
-  const db = getDb();
-  const { data, error } = await db
-    .from("send_job_recipients")
-    .select("id, job_id, recipient, message_id")
-    .eq("id", id)
-    .limit(1);
-  assertNoError(error, "Failed to load send job recipient");
-
-  const row = (data ?? [])[0] as
-    | {
-        id: number;
-        job_id: string;
-        recipient: string;
-        message_id: string | null;
-      }
-    | undefined;
-  if (!row) {
-    return null;
-  }
-
-  const jobId = String(row.job_id ?? "").trim();
-  if (!jobId) {
-    return null;
-  }
-
-  const { data: jobData, error: jobError } = await db
-    .from("send_jobs")
-    .select("workspace_id")
-    .eq("id", jobId)
-    .limit(1);
-  assertNoError(jobError, "Failed to load send job workspace");
-
-  const jobRow = (jobData ?? [])[0] as { workspace_id: string } | undefined;
-  const workspaceId = String(jobRow?.workspace_id ?? "").trim().toLowerCase();
-  if (!workspaceId) {
-    return null;
-  }
-
-  return {
-    id,
-    jobId,
-    workspaceId,
-    recipient: String(row.recipient ?? "").trim().toLowerCase(),
-    messageId: normalizeNullableText(row.message_id, 255),
-  };
 }
 
 export async function markSendJobRecipientSent(

@@ -304,14 +304,7 @@ type DnsProvider = "manual" | "namecheap" | "cloudflare" | "route53";
 
 type FieldOperator = "equals" | "notEquals" | "contains" | "notContains";
 type ConditionMatchMode = "all" | "any";
-type HistoryEventType =
-  | "send"
-  | "delivery"
-  | "open"
-  | "reply"
-  | "click"
-  | "bounce"
-  | "complaint";
+type HistoryEventType = "send" | "delivery" | "open" | "click" | "bounce" | "complaint";
 
 type FieldCondition = {
   id: string;
@@ -391,8 +384,6 @@ function normalizeHistoryEventType(eventType: string): HistoryEventType | null {
       return "delivery";
     case "open":
       return "open";
-    case "reply":
-      return "reply";
     case "click":
       return "click";
     case "bounce":
@@ -519,7 +510,6 @@ const HISTORY_EVENTS: HistoryEventType[] = [
   "send",
   "delivery",
   "open",
-  "reply",
   "click",
   "bounce",
   "complaint",
@@ -908,25 +898,20 @@ const HISTORY_EVENT_META: Record<string, HistoryEventMeta> = {
     className: "bg-blue-100 text-blue-700",
     priority: 6,
   },
-  Reply: {
-    label: "Replied",
-    className: "bg-emerald-100 text-emerald-700",
-    priority: 7,
-  },
   Click: {
     label: "Clicked",
     className: "bg-purple-100 text-purple-700",
-    priority: 8,
+    priority: 7,
   },
   Subscription: {
     label: "Subscription",
     className: "bg-cyan-100 text-cyan-700",
-    priority: 9,
+    priority: 8,
   },
   Send: {
     label: "Sent",
     className: "bg-gray-100 text-gray-600",
-    priority: 10,
+    priority: 9,
   },
 };
 
@@ -942,9 +927,6 @@ function normalizeEventType(eventType: string): string {
       return "Delivery";
     case "open":
       return "Open";
-    case "reply":
-    case "replyreceived":
-      return "Reply";
     case "click":
       return "Click";
     case "bounce":

@@ -145,7 +145,6 @@ function buildRawMessage({
   html,
   plainText,
   unsubscribeUrl,
-  replyTo,
 }: {
   from: string;
   to: string;
@@ -153,7 +152,6 @@ function buildRawMessage({
   html: string;
   plainText: string;
   unsubscribeUrl?: string;
-  replyTo?: string;
 }): string {
   const boundary = `----=_Part_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
@@ -171,9 +169,6 @@ function buildRawMessage({
   if (unsubscribeUrl) {
     headers.push(`List-Unsubscribe: <${unsubscribeUrl}>`);
     headers.push(`List-Unsubscribe-Post: List-Unsubscribe=One-Click`);
-  }
-  if (replyTo) {
-    headers.push(`Reply-To: ${replyTo}`);
   }
 
   const body = [
@@ -201,7 +196,6 @@ export async function sendEmail({
   html,
   configSet,
   unsubscribeUrl,
-  replyTo,
 }: {
   from: string;
   fromName?: string;
@@ -210,7 +204,6 @@ export async function sendEmail({
   html: string;
   configSet: string;
   unsubscribeUrl?: string;
-  replyTo?: string;
 }) {
   const plainText = htmlToPlainText(html);
   const source = formatSourceAddress(from, fromName);
@@ -222,7 +215,6 @@ export async function sendEmail({
     html,
     plainText,
     unsubscribeUrl,
-    replyTo,
   });
 
   const cmd = new SendRawEmailCommand({
