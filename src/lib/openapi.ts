@@ -764,7 +764,7 @@ export const openapiSpec = {
       },
       post: {
         operationId: "createContactEvent",
-        summary: "Ingest a normalized contact event such as a reply",
+        summary: "Ingest a normalized contact event",
         tags: ["Send"],
         security: [{ jwt: [] }, { apiKey: [] }],
         requestBody: {
@@ -777,7 +777,7 @@ export const openapiSpec = {
                 properties: {
                   workspaceId: { type: "string" },
                   contactEmail: { type: "string", format: "email" },
-                  eventType: { type: "string", example: "reply_received" },
+                  eventType: { type: "string", example: "status_updated" },
                   eventValue: { type: ["string", "null"] },
                   messageId: { type: "string" },
                   source: { type: "string", default: "api" },
