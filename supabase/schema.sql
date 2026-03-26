@@ -216,26 +216,6 @@ create table if not exists scheduled_tasks (
   updated_at timestamptz not null default now()
 );
 
-create table if not exists contact_events (
-  id uuid primary key,
-  workspace_id text not null,
-  contact_email text not null,
-  event_type text not null,
-  event_value text null,
-  message_id text null,
-  send_job_id uuid null,
-  campaign_id uuid null,
-  campaign_run_id uuid null,
-  campaign_step_id uuid null,
-  source text not null default 'api',
-  source_ref text null,
-  detail text null,
-  metadata jsonb not null default '{}'::jsonb,
-  occurred_at timestamptz not null default now(),
-  created_at timestamptz not null default now(),
-  idempotency_key text null
-);
-
 do $$
 begin
   if not exists (
@@ -244,66 +224,6 @@ begin
     alter table send_jobs
       add constraint send_jobs_campaign_id_fkey
       foreign key (campaign_id) references campaign_workflows(id) on delete set null;
-  end if;
-end
-$$;
-
-do $$
-begin
-  if not exists (
-    select 1 from pg_constraint where conname = 'contact_events_message_id_fkey'
-  ) then
-    alter table contact_events
-      add constraint contact_events_message_id_fkey
-      foreign key (message_id) references sends(message_id) on delete set null;
-  end if;
-end
-$$;
-
-do $$
-begin
-  if not exists (
-    select 1 from pg_constraint where conname = 'contact_events_send_job_id_fkey'
-  ) then
-    alter table contact_events
-      add constraint contact_events_send_job_id_fkey
-      foreign key (send_job_id) references send_jobs(id) on delete set null;
-  end if;
-end
-$$;
-
-do $$
-begin
-  if not exists (
-    select 1 from pg_constraint where conname = 'contact_events_campaign_id_fkey'
-  ) then
-    alter table contact_events
-      add constraint contact_events_campaign_id_fkey
-      foreign key (campaign_id) references campaign_workflows(id) on delete set null;
-  end if;
-end
-$$;
-
-do $$
-begin
-  if not exists (
-    select 1 from pg_constraint where conname = 'contact_events_campaign_run_id_fkey'
-  ) then
-    alter table contact_events
-      add constraint contact_events_campaign_run_id_fkey
-      foreign key (campaign_run_id) references campaign_runs(id) on delete set null;
-  end if;
-end
-$$;
-
-do $$
-begin
-  if not exists (
-    select 1 from pg_constraint where conname = 'contact_events_campaign_step_id_fkey'
-  ) then
-    alter table contact_events
-      add constraint contact_events_campaign_step_id_fkey
-      foreign key (campaign_step_id) references campaign_run_steps(id) on delete set null;
   end if;
 end
 $$;
@@ -367,24 +287,6 @@ create index if not exists idx_scheduled_tasks_workspace on scheduled_tasks(work
 create unique index if not exists idx_scheduled_tasks_idempotency_key
   on scheduled_tasks(idempotency_key)
   where idempotency_key is not null;
-create index if not exists idx_contact_events_workspace_time
-  on contact_events(workspace_id, occurred_at desc, created_at desc);
-create index if not exists idx_contact_events_contact
-  on contact_events(workspace_id, contact_email, event_type, occurred_at desc);
-create index if not exists idx_contact_events_message_id
-  on contact_events(message_id);
-create index if not exists idx_contact_events_send_job_id
-  on contact_events(send_job_id);
-create index if not exists idx_contact_events_campaign_id
-  on contact_events(campaign_id);
-create index if not exists idx_contact_events_campaign_run_id
-  on contact_events(campaign_run_id);
-create index if not exists idx_contact_events_campaign_step_id
-  on contact_events(campaign_step_id);
-create unique index if not exists idx_contact_events_workspace_idempotency
-  on contact_events(workspace_id, idempotency_key)
-  where idempotency_key is not null;
-
 create table if not exists api_keys (
   id uuid primary key default gen_random_uuid(),
   workspace_id text not null,
@@ -590,7 +492,6 @@ alter table if exists campaign_workflows enable row level security;
 alter table if exists campaign_runs enable row level security;
 alter table if exists campaign_run_steps enable row level security;
 alter table if exists scheduled_tasks enable row level security;
-alter table if exists contact_events enable row level security;
 alter table if exists api_keys enable row level security;
 alter table if exists workspace_billing enable row level security;
 alter table if exists workspace_credit_grants enable row level security;

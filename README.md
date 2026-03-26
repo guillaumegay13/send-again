@@ -10,7 +10,7 @@ Open source email campaign platform. Compose HTML emails, manage contacts, send 
 - **AI Compose** — describe what you want, get HTML email generated for you
 - **HTML Preview** — live preview as you write
 - **Campaigns** — organize sends into campaigns with per-campaign analytics
-- **Event Tracking** — first-party open tracking plus SNS webhooks for delivery, clicks, bounces, and complaints
+- **Event Tracking** — opens, clicks, bounces, complaints via SNS webhooks
 - **Contact Management** — CSV and API import, automatic unsubscribe/bounce handling
 - **Automatic DNS Setup** — Namecheap, Cloudflare, and Route53 integration for SPF/DKIM
 - **High Deliverability** — powered by Amazon SES with domain verification built in
@@ -32,7 +32,7 @@ Open source email campaign platform. Compose HTML emails, manage contacts, send 
 
 - Node.js 20+
 - A Supabase project
-- An AWS account with SES configured (verified domain + configuration set with SNS for delivery, clicks, bounces, and complaints)
+- An AWS account with SES configured (verified domain + configuration set with SNS)
 
 ### Install
 
@@ -129,7 +129,6 @@ npm run build && npm start
 | `POST` | `/api/send/process` | Worker endpoint for send job processing |
 | `GET/POST` | `/api/tasks/process` | Canonical worker endpoint for scheduled task progression and send job processing |
 | `GET/POST` | `/api/campaigns/process` | Compatibility alias for `/api/tasks/process` |
-| `GET/POST` | `/api/contact-events` | Read or ingest normalized contact and reply events |
 | `GET/POST/DELETE` | `/api/contacts` | List, import, or explicitly delete contacts |
 | `GET/DELETE` | `/api/contacts/[email]` | Get or delete a contact |
 | `GET/POST/DELETE` | `/api/keys` | Manage API keys |
@@ -137,7 +136,7 @@ npm run build && npm start
 ### Authentication
 
 - **Supabase JWT** — works on all endpoints
-- **API key** (`sk_...`) — works on `/api/contacts`, `/api/send`, `/api/send/status`, `/api/send/jobs`, `/api/contact-events`
+- **API key** (`sk_...`) — works on `/api/contacts`, `/api/send`, `/api/send/status`, `/api/send/jobs`
 
 ### Billing endpoints
 
@@ -150,7 +149,7 @@ npm run build && npm start
 
 ## SNS Webhook Setup
 
-To receive delivery/click/bounce/complaint events:
+To receive delivery/open/click/bounce/complaint events:
 
 1. Create an SNS topic in AWS
 2. Configure your SES Configuration Set to publish events to that topic
@@ -177,9 +176,8 @@ To receive delivery/click/bounce/complaint events:
 | `SUPABASE_URL` | Yes | — | Supabase project URL |
 | `SUPABASE_PUBLISHABLE_KEY` | Yes | — | Supabase publishable key |
 | `SUPABASE_SECRET_KEY` | Yes | — | Supabase server secret key |
-| `APP_BASE_URL` | No | request origin | Public base URL for unsubscribe and open-tracking links |
+| `APP_BASE_URL` | No | request origin | Public base URL for unsubscribe links |
 | `UNSUBSCRIBE_SECRET` | No | `SUPABASE_SECRET_KEY` | Secret for signing unsubscribe links |
-| `OPEN_TRACKING_SECRET` | No | `UNSUBSCRIBE_SECRET` | Secret for signing open-tracking pixel URLs |
 | `OPENAI_API_KEY` | No | — | Enables AI email generation |
 | `OPENAI_MODEL` | No | `gpt-4.1-mini` | Model for AI generation |
 | `INITIAL_OWNER_EMAIL` | No | — | Bootstrap owner account |
