@@ -25,7 +25,8 @@ export async function POST(req: NextRequest) {
     const matched = await matchRecipientsByConditions(
       workspace,
       normalizeMatchMode(body.matchMode),
-      conditions
+      conditions,
+      { includeHistoricalRecipients: true }
     );
 
     return NextResponse.json({ matched });

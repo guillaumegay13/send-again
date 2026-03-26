@@ -48,6 +48,7 @@ import { enqueueScheduledTask } from "@/lib/task-queue";
 interface CandidateContact {
   email: string;
   fields: Record<string, string>;
+  hasContact: boolean;
 }
 
 interface RecipientHistoryRecord {
@@ -133,6 +134,10 @@ function evaluateFieldCondition(
   contact: CandidateContact,
   condition: FieldCondition
 ): boolean {
+  if (!contact.hasContact) {
+    return false;
+  }
+
   const actual = normalizeFieldValue(contact.fields, condition.field)
     .trim()
     .toLowerCase();
@@ -185,14 +190,59 @@ function evaluateHistoryCondition(
 
 async function loadCandidateContacts(
   workspaceId: string,
-  recipientEmails: string[] | null
+  recipientEmails: string[] | null,
+  options: { includeHistoricalRecipients?: boolean } = {}
 ): Promise<CandidateContact[]> {
   if (!recipientEmails || recipientEmails.length === 0) {
     const contacts = await getContacts(workspaceId);
-    return contacts.map((contact) => ({
-      email: contact.email.toLowerCase(),
-      fields: contact.fields,
-    }));
+    const byEmail = new Map(
+      contacts.map((contact) => [
+        contact.email.toLowerCase(),
+        {
+          email: contact.email.toLowerCase(),
+          fields: contact.fields,
+          hasContact: true,
+        },
+      ])
+    );
+
+    if (options.includeHistoricalRecipients) {
+      const db = getDb();
+      const pageSize = 1000;
+      let from = 0;
+
+      while (true) {
+        const { data, error } = await db
+          .from("sends")
+          .select("recipient")
+          .eq("workspace_id", workspaceId)
+          .order("id", { ascending: true })
+          .range(from, from + pageSize - 1);
+        if (error) {
+          throw new Error(
+            `Failed to fetch historical recipients: ${error.message}`
+          );
+        }
+
+        const rows = (data ?? []) as Array<{ recipient: string }>;
+        if (rows.length === 0) break;
+
+        for (const row of rows) {
+          const email = String(row.recipient ?? "").trim().toLowerCase();
+          if (!email || byEmail.has(email)) continue;
+          byEmail.set(email, {
+            email,
+            fields: {},
+            hasContact: false,
+          });
+        }
+
+        from += rows.length;
+        if (rows.length < pageSize) break;
+      }
+    }
+
+    return Array.from(byEmail.values());
   }
 
   const dedupedRecipients = Array.from(
@@ -200,12 +250,19 @@ async function loadCandidateContacts(
   );
   const contacts = await getContactsByEmails(workspaceId, dedupedRecipients);
   const byEmail = new Map(
-    contacts.map((contact) => [contact.email.toLowerCase(), contact.fields])
+    contacts.map((contact) => [
+      contact.email.toLowerCase(),
+      {
+        fields: contact.fields,
+        hasContact: true,
+      },
+    ])
   );
 
   return dedupedRecipients.map((email) => ({
     email,
-    fields: byEmail.get(email) ?? {},
+    fields: byEmail.get(email)?.fields ?? {},
+    hasContact: byEmail.get(email)?.hasContact ?? false,
   }));
 }
 
@@ -313,9 +370,14 @@ async function evaluateConditions(
   workspaceId: string,
   matchMode: ConditionMatchMode,
   conditions: RecipientCondition[],
-  recipientEmails: string[] | null
+  recipientEmails: string[] | null,
+  options: { includeHistoricalRecipients?: boolean } = {}
 ): Promise<{ matched: string[]; unmatched: string[] }> {
-  const contacts = await loadCandidateContacts(workspaceId, recipientEmails);
+  const contacts = await loadCandidateContacts(
+    workspaceId,
+    recipientEmails,
+    options
+  );
   if (contacts.length === 0) {
     return { matched: [], unmatched: [] };
   }
@@ -364,13 +426,15 @@ async function evaluateConditions(
 export async function matchRecipientsByConditions(
   workspaceId: string,
   matchMode: ConditionMatchMode,
-  conditions: RecipientCondition[]
+  conditions: RecipientCondition[],
+  options: { includeHistoricalRecipients?: boolean } = {}
 ): Promise<string[]> {
   const { matched } = await evaluateConditions(
     workspaceId,
     matchMode,
     conditions,
-    null
+    null,
+    options
   );
   return matched;
 }
