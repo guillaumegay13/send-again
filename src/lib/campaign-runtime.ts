@@ -329,8 +329,8 @@ async function loadRecipientHistory(
 
   const eventsByMessageId = new Map<string, Set<string>>();
   const messageIds = Array.from(sendsByMessageId.keys());
-  for (let index = 0; index < messageIds.length; index += 500) {
-    const chunk = messageIds.slice(index, index + 500);
+  for (let index = 0; index < messageIds.length; index += 50) {
+    const chunk = messageIds.slice(index, index + 50);
     const { data, error } = await db
       .from("email_events")
       .select("message_id, event_type")
