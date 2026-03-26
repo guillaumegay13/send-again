@@ -377,6 +377,11 @@ function loadPersistedDnsSetupState(): Partial<NamecheapDnsConfig> & {
   }
 }
 
+function normalizeWorkspaceSelection(value: string | null | undefined): string | null {
+  const normalized = value?.trim().toLowerCase() ?? "";
+  return normalized || null;
+}
+
 function loadPersistedActiveWorkspace(userEmail: string | null): string | null {
   if (typeof window === "undefined" || !userEmail) return null;
 
@@ -393,8 +398,7 @@ function loadPersistedActiveWorkspace(userEmail: string | null): string | null {
     ];
     if (typeof persisted !== "string") return null;
 
-    const normalized = persisted.trim().toLowerCase();
-    return normalized || null;
+    return normalizeWorkspaceSelection(persisted);
   } catch {
     return null;
   }
@@ -435,6 +439,42 @@ function persistActiveWorkspace(
     );
   } catch {
     // Ignore local storage failures and keep selection in memory.
+  }
+}
+
+function loadWorkspaceFromUrl(): string | null {
+  if (typeof window === "undefined") return null;
+
+  try {
+    return normalizeWorkspaceSelection(
+      new URL(window.location.href).searchParams.get("workspace")
+    );
+  } catch {
+    return null;
+  }
+}
+
+function persistWorkspaceToUrl(workspaceId: string | null) {
+  if (typeof window === "undefined") return;
+
+  try {
+    const url = new URL(window.location.href);
+    const normalizedWorkspaceId = normalizeWorkspaceSelection(workspaceId);
+
+    if (normalizedWorkspaceId) {
+      url.searchParams.set("workspace", normalizedWorkspaceId);
+    } else {
+      url.searchParams.delete("workspace");
+    }
+
+    const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+    const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+
+    if (nextUrl !== currentUrl) {
+      window.history.replaceState(window.history.state, "", nextUrl);
+    }
+  } catch {
+    // Ignore URL persistence failures and keep selection in memory.
   }
 }
 
@@ -1289,6 +1329,7 @@ export default function ComposePage() {
 
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [hasLoadedWorkspaceList, setHasLoadedWorkspaceList] = useState(false);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>("compose");
 
@@ -1703,6 +1744,7 @@ export default function ComposePage() {
 
     if (!sessionToken) {
       setLoading(false);
+      setHasLoadedWorkspaceList(false);
       setWorkspaces([]);
       setActiveId(null);
       setWorkspaceDeleteConfirmOpen(false);
@@ -1749,6 +1791,7 @@ export default function ComposePage() {
     }
 
     setLoading(true);
+    setHasLoadedWorkspaceList(false);
     setAuthError(null);
     fetchJson<Workspace[]>("/api/workspaces")
       .then((data) => {
@@ -1758,23 +1801,31 @@ export default function ComposePage() {
           contactSourceProvider: workspace.contactSourceProvider ?? "manual",
           contactSourceConfig: workspace.contactSourceConfig ?? {},
         }));
+        const requestedWorkspaceId = loadWorkspaceFromUrl();
         const persistedWorkspaceId = loadPersistedActiveWorkspace(userEmail);
         setWorkspaces(normalized);
         setActiveId((current) => {
-          if (
-            persistedWorkspaceId &&
-            normalized.some((workspace) => workspace.id === persistedWorkspaceId)
-          ) {
-            return persistedWorkspaceId;
-          }
           if (
             current &&
             normalized.some((workspace) => workspace.id === current)
           ) {
             return current;
           }
+          if (
+            requestedWorkspaceId &&
+            normalized.some((workspace) => workspace.id === requestedWorkspaceId)
+          ) {
+            return requestedWorkspaceId;
+          }
+          if (
+            persistedWorkspaceId &&
+            normalized.some((workspace) => workspace.id === persistedWorkspaceId)
+          ) {
+            return persistedWorkspaceId;
+          }
           return normalized[0]?.id ?? null;
         });
+        setHasLoadedWorkspaceList(true);
       })
       .catch((error: unknown) => {
         console.error(error);
@@ -1786,9 +1837,10 @@ export default function ComposePage() {
   }, [authLoading, sessionToken, userEmail, fetchJson]);
 
   useEffect(() => {
-    if (!sessionToken || !userEmail) return;
+    if (!sessionToken || !userEmail || !hasLoadedWorkspaceList) return;
     persistActiveWorkspace(userEmail, activeId);
-  }, [sessionToken, userEmail, activeId]);
+    persistWorkspaceToUrl(activeId);
+  }, [sessionToken, userEmail, activeId, hasLoadedWorkspaceList]);
 
   useEffect(() => {
     activeWorkspaceIdRef.current = activeId;
