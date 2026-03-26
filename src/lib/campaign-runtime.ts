@@ -361,6 +361,20 @@ async function evaluateConditions(
   return { matched, unmatched };
 }
 
+export async function matchRecipientsByConditions(
+  workspaceId: string,
+  matchMode: ConditionMatchMode,
+  conditions: RecipientCondition[]
+): Promise<string[]> {
+  const { matched } = await evaluateConditions(
+    workspaceId,
+    matchMode,
+    conditions,
+    null
+  );
+  return matched;
+}
+
 async function resolveSendAudience(
   workspaceId: string,
   audience: SendAudience

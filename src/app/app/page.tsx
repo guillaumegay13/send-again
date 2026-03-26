@@ -13,7 +13,6 @@ import {
 } from "react";
 import { getBrowserSupabaseClient } from "@/lib/supabase-browser";
 import { appendWorkspaceFooter } from "@/lib/email-footer";
-import { normalizeHistorySubject } from "@/lib/history-subject";
 import { FancySelect } from "@/components/ui/fancy-select";
 import { AppSidebar } from "@/components/ui/app-sidebar";
 import { CampaignsShell } from "@/components/campaigns-shell";
@@ -97,6 +96,10 @@ interface ReusableSendTemplateResponse {
   from: string;
   fromName: string;
   createdAt: string;
+}
+
+interface RecipientMatchResponse {
+  matched: string[];
 }
 
 interface SubjectCampaignMetric {
@@ -335,19 +338,10 @@ type HistoryCondition = {
 };
 
 type RecipientCondition = FieldCondition | HistoryCondition;
-
-type HistoryEventIndex = Map<HistoryEventType, Map<string, Set<string>>>;
 type SettingsSaveState = "idle" | "dirty" | "saving" | "saved" | "error";
 
 function createConditionId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function parseBooleanLike(value: string): boolean | null {
-  const normalized = value.trim().toLowerCase();
-  if (["true", "1", "yes", "y", "verified"].includes(normalized)) return true;
-  if (["false", "0", "no", "n", "unverified"].includes(normalized)) return false;
-  return null;
 }
 
 function isDnsProvider(value: unknown): value is DnsProvider {
@@ -610,129 +604,6 @@ function persistTabToUrl(tab: Tab | null) {
   } catch {
     // Ignore URL persistence failures and keep selection in memory.
   }
-}
-
-function normalizeHistoryEventType(eventType: string): HistoryEventType | null {
-  switch (eventType.trim().toLowerCase()) {
-    case "send":
-      return "send";
-    case "delivery":
-      return "delivery";
-    case "open":
-      return "open";
-    case "click":
-      return "click";
-    case "bounce":
-      return "bounce";
-    case "complaint":
-      return "complaint";
-    default:
-      return null;
-  }
-}
-
-function buildHistoryEventIndex(history: HistoryItem[]): HistoryEventIndex {
-  const index: HistoryEventIndex = new Map();
-
-  for (const item of history) {
-    const subject = normalizeHistorySubject(item.subject);
-    if (!subject || !item.recipient) continue;
-    const emailKey = item.recipient.toLowerCase();
-
-    for (const event of item.events) {
-      const type = normalizeHistoryEventType(event.type);
-      if (!type) continue;
-      const eventIndex = index.get(type) ?? new Map<string, Set<string>>();
-      const recipients = eventIndex.get(subject) ?? new Set<string>();
-      recipients.add(emailKey);
-      eventIndex.set(subject, recipients);
-      index.set(type, eventIndex);
-    }
-  }
-
-  return index;
-}
-
-function evaluateFieldCondition(
-  contact: Contact,
-  condition: FieldCondition
-): boolean {
-  const target = condition.field.trim().toLowerCase();
-  if (!target) return false;
-
-  const rawValue = contact.fields[target] ?? "";
-  const expected = condition.value.trim();
-  const actual = rawValue.trim();
-
-  if (
-    !expected &&
-    (condition.operator === "equals" || condition.operator === "notEquals")
-  ) {
-    const matches = actual === "";
-    return condition.operator === "equals" ? matches : !matches;
-  }
-
-  if (condition.operator === "contains" || condition.operator === "notContains") {
-    if (!expected) return false;
-    const contains = actual.toLowerCase().includes(expected.toLowerCase());
-    return condition.operator === "contains" ? contains : !contains;
-  }
-
-  const actualBool = parseBooleanLike(actual);
-  const expectedBool = parseBooleanLike(expected);
-
-  if (actualBool !== null && expectedBool !== null) {
-    const equals = actualBool === expectedBool;
-    return condition.operator === "equals" ? equals : !equals;
-  }
-
-  const equals = actual.toLowerCase() === expected.toLowerCase();
-  return condition.operator === "equals" ? equals : !equals;
-}
-
-function evaluateHistoryCondition(
-  contact: Contact,
-  condition: HistoryCondition,
-  index: HistoryEventIndex
-): boolean {
-  const email = contact.email.toLowerCase();
-  const needle = normalizeHistorySubject(condition.subject);
-  if (!needle) return false;
-
-  const subjectMap = index.get(condition.eventType);
-  if (!subjectMap) return false;
-
-  if (condition.subjectMatch === "contains") {
-    for (const [subject, recipients] of subjectMap) {
-      if (!subject.includes(needle)) continue;
-      if (recipients.has(email)) return true;
-    }
-    return false;
-  }
-
-  return subjectMap.get(needle)?.has(email) ?? false;
-}
-
-function evaluateCondition(
-  contact: Contact,
-  mode: ConditionMatchMode,
-  conditions: RecipientCondition[],
-  historyIndex: HistoryEventIndex
-): boolean {
-  if (!conditions.length) return false;
-
-  const tests = conditions.map((condition) => {
-    if (condition.kind === "field") {
-      return evaluateFieldCondition(contact, condition);
-    }
-    return evaluateHistoryCondition(contact, condition, historyIndex);
-  });
-
-  if (mode === "any") {
-    return tests.some(Boolean);
-  }
-
-  return tests.every(Boolean);
 }
 
 const FIELD_OPERATORS: Array<{ value: FieldOperator; label: string }> = [
@@ -1502,6 +1373,13 @@ export default function ComposePage() {
   );
   const [historyReuseLoadingMessageId, setHistoryReuseLoadingMessageId] =
     useState<string | null>(null);
+  const [conditionMatchedRecipients, setConditionMatchedRecipients] = useState<
+    string[]
+  >([]);
+  const [conditionMatchLoading, setConditionMatchLoading] = useState(false);
+  const [conditionMatchError, setConditionMatchError] = useState<string | null>(
+    null
+  );
   const [historyView, setHistoryView] = useState<HistoryView>("activity");
   const [subjectMetrics, setSubjectMetrics] = useState<SubjectCampaignMetric[]>(
     []
@@ -1612,6 +1490,7 @@ export default function ComposePage() {
     null
   );
   const settingsSaveRequestSeqRef = useRef(0);
+  const recipientMatchRequestSeqRef = useRef(0);
   const activeWorkspaceIdRef = useRef<string | null>(null);
   const contactDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sendJobPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -2261,6 +2140,58 @@ export default function ComposePage() {
     setRecipientConditions([]);
     setConditionMatchMode("all");
   }, [activeId, stopSendPolling]);
+
+  useEffect(() => {
+    if (!sessionToken || !activeId || recipientConditions.length === 0) {
+      recipientMatchRequestSeqRef.current += 1;
+      setConditionMatchedRecipients([]);
+      setConditionMatchLoading(false);
+      setConditionMatchError(null);
+      return;
+    }
+
+    const requestSeq = ++recipientMatchRequestSeqRef.current;
+    setConditionMatchLoading(true);
+    setConditionMatchError(null);
+    setConditionMatchedRecipients([]);
+
+    const timer = setTimeout(() => {
+      fetchJson<RecipientMatchResponse>("/api/contacts/match", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspace: activeId,
+          matchMode: conditionMatchMode,
+          conditions: recipientConditions,
+        }),
+      })
+        .then((data) => {
+          if (requestSeq !== recipientMatchRequestSeqRef.current) return;
+          setConditionMatchedRecipients(uniqueEmails(data.matched));
+        })
+        .catch((error) => {
+          if (requestSeq !== recipientMatchRequestSeqRef.current) return;
+          setConditionMatchedRecipients([]);
+          setConditionMatchError(
+            error instanceof Error ? error.message : "Failed to match recipients."
+          );
+        })
+        .finally(() => {
+          if (requestSeq !== recipientMatchRequestSeqRef.current) return;
+          setConditionMatchLoading(false);
+        });
+    }, 250);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [
+    sessionToken,
+    activeId,
+    conditionMatchMode,
+    recipientConditions,
+    fetchJson,
+  ]);
 
   useEffect(() => {
     if (!activeSendJobId) {
@@ -3280,23 +3211,6 @@ export default function ComposePage() {
       ).sort(),
     [history]
   );
-  const historyEventIndex = useMemo(
-    () => buildHistoryEventIndex(history),
-    [history]
-  );
-
-  const conditionMatchedRecipients = useMemo(() => {
-    if (!recipientConditions.length || contacts.length === 0) return [];
-    const matched = contacts.filter((contact) =>
-      evaluateCondition(contact, conditionMatchMode, recipientConditions, historyEventIndex)
-    );
-    return uniqueEmails(matched.map((c) => c.email));
-  }, [
-    contacts,
-    recipientConditions,
-    conditionMatchMode,
-    historyEventIndex,
-  ]);
 
   const historyTotalPages = Math.max(
     1,
@@ -3368,7 +3282,7 @@ export default function ComposePage() {
   }
 
   function importMatchedRecipients() {
-    if (!conditionMatchedRecipients.length) return;
+    if (conditionMatchLoading || !conditionMatchedRecipients.length) return;
     setTo((prev) =>
       uniqueEmails([
         ...prev.split("\n").map((value) => value.trim()).filter(Boolean),
@@ -3467,6 +3381,10 @@ export default function ComposePage() {
   async function handleSend() {
     if (!sessionToken || !workspace?.from || !workspace.id || !subject || !html) {
       setResult("Fill in all fields.");
+      return;
+    }
+    if (conditionMatchLoading) {
+      setResult("Wait for recipient rules to finish matching.");
       return;
     }
     if (!recipients.length) {
@@ -4026,10 +3944,14 @@ export default function ComposePage() {
                     <button
                       type="button"
                       onClick={importMatchedRecipients}
-                      disabled={!conditionMatchedRecipients.length}
+                      disabled={
+                        conditionMatchLoading || !conditionMatchedRecipients.length
+                      }
                       className="text-xs text-black border border-gray-300 rounded px-2 py-1 hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      Import Matched ({conditionMatchedRecipients.length})
+                      {conditionMatchLoading
+                        ? "Matching..."
+                        : `Import Matched (${conditionMatchedRecipients.length})`}
                     </button>
                   </div>
                 </div>
@@ -4291,14 +4213,20 @@ export default function ComposePage() {
               </div>
 
               <div className="text-xs text-gray-500">
-                Manual recipients: {manualRecipients.length}. Dynamic recipients:
-                {" "}
-                {conditionMatchedRecipients.length}. Total: {recipients.length}.
+                Manual recipients: {manualRecipients.length}. Dynamic recipients:{" "}
+                {conditionMatchLoading
+                  ? "matching..."
+                  : conditionMatchedRecipients.length}
+                . Total:{" "}
+                {conditionMatchLoading ? manualRecipients.length : recipients.length}.
               </div>
+              {conditionMatchError && (
+                <div className="text-xs text-red-600">{conditionMatchError}</div>
+              )}
 
               <button
                 onClick={handleSend}
-                disabled={sending}
+                disabled={sending || conditionMatchLoading}
                 className="mt-2 bg-black text-white rounded px-4 py-2 text-sm font-medium hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed w-fit"
               >
                 {sending && activeSendJob
