@@ -1350,6 +1350,7 @@ export default function ComposePage() {
     null
   );
   const [contactsPage, setContactsPage] = useState(1);
+  const [contactsSearch, setContactsSearch] = useState("");
   const [csvImportConfig, setCsvImportConfig] = useState<CsvImportConfig | null>(
     null
   );
@@ -3148,20 +3149,29 @@ export default function ComposePage() {
     );
   }
 
+  const contactsFiltered = useMemo(() => {
+    const q = contactsSearch.trim().toLowerCase();
+    if (!q) return contacts;
+    return contacts.filter(
+      (c) =>
+        c.email.toLowerCase().includes(q) ||
+        Object.values(c.fields).some((v) => v?.toLowerCase().includes(q))
+    );
+  }, [contacts, contactsSearch]);
   const contactsTotalPages = Math.max(
     1,
-    Math.ceil(contacts.length / CONTACTS_TABLE_PAGE_SIZE)
+    Math.ceil(contactsFiltered.length / CONTACTS_TABLE_PAGE_SIZE)
   );
   const contactsVisibleRows = useMemo(() => {
     const start = (contactsPage - 1) * CONTACTS_TABLE_PAGE_SIZE;
-    return contacts.slice(start, start + CONTACTS_TABLE_PAGE_SIZE);
-  }, [contacts, contactsPage]);
+    return contactsFiltered.slice(start, start + CONTACTS_TABLE_PAGE_SIZE);
+  }, [contactsFiltered, contactsPage]);
   const contactsRangeStart =
-    contacts.length > 0
+    contactsFiltered.length > 0
       ? (contactsPage - 1) * CONTACTS_TABLE_PAGE_SIZE + 1
       : 0;
   const contactsRangeEnd =
-    contacts.length > 0
+    contactsFiltered.length > 0
       ? contactsRangeStart + contactsVisibleRows.length - 1
       : 0;
 
@@ -4374,6 +4384,22 @@ export default function ComposePage() {
               <p className="mb-4 text-xs text-gray-500">{contactsImportMessage}</p>
             )}
 
+            {/* Search */}
+            {contacts.length > 0 && (
+              <div className="mb-4">
+                <input
+                  type="text"
+                  value={contactsSearch}
+                  onChange={(e) => {
+                    setContactsSearch(e.target.value);
+                    setContactsPage(1);
+                  }}
+                  placeholder="Search contacts..."
+                  className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
+                />
+              </div>
+            )}
+
             {/* Contact table */}
             {contacts.length === 0 ? (
               <div className="text-sm text-gray-400">
@@ -4382,6 +4408,8 @@ export default function ComposePage() {
                   CSV format: <code className="bg-gray-100 px-1 rounded">email,name,company,...</code>
                 </p>
               </div>
+            ) : contactsFiltered.length === 0 ? (
+              <p className="text-sm text-gray-400">No contacts match &ldquo;{contactsSearch.trim()}&rdquo;</p>
             ) : (
               <>
                 <div className="border border-gray-200 rounded overflow-x-auto">
@@ -4439,9 +4467,12 @@ export default function ComposePage() {
                 </div>
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-gray-400">
                   <p>
-                    Showing {contactsRangeStart}-{contactsRangeEnd} of {contacts.length}{" "}
+                    Showing {contactsRangeStart}-{contactsRangeEnd} of {contactsFiltered.length}{" "}
                     contact
-                    {contacts.length !== 1 && "s"}
+                    {contactsFiltered.length !== 1 && "s"}
+                    {contactsSearch.trim() && contactsFiltered.length !== contacts.length && (
+                      <> (filtered from {contacts.length})</>
+                    )}
                   </p>
                   {contactsTotalPages > 1 && (
                     <div className="flex items-center gap-2">
