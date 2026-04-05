@@ -1,0 +1,36 @@
+src/app/app/page.tsx
+  114d4f952b23b0a0 1353,3152-3160,3163,3167-3168,3170,3174,4387-4402,4411-4412,4470,4472-4475
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "72ac198b598cf50aa47134bacd503afbee47a650",
+  "prompts": {
+    "114d4f952b23b0a0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ab07f884-6e25-4b39-a866-97032ef606fc",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Guillaume Gay",
+      "messages": [],
+      "total_additions": 38,
+      "total_deletions": 7,
+      "accepted_lines": 38,
+      "overriden_lines": 0
+    },
+    "246b1b221176c31d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5b059ae1-5d00-4105-842b-ffb91ef0e680",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Guillaume Gay",
+      "messages": [],
+      "total_additions": 189,
+      "total_deletions": 13,
+      "accepted_lines": 176,
+      "overriden_lines": 0
+    }
+  }
+}
