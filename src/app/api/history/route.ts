@@ -53,6 +53,7 @@ export async function GET(req: NextRequest) {
       recipient: row.recipient,
       subject: row.subject,
       sentAt: row.sent_at,
+      senderEmail: row.sender_email,
       events: JSON.parse(row.events),
     }));
 

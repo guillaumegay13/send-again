@@ -131,6 +131,7 @@ export const openapiSpec = {
           recipient: { type: "string", format: "email" },
           subject: { type: "string" },
           sentAt: { type: "string", format: "date-time" },
+          senderEmail: { type: "string", format: "email", nullable: true },
           events: {
             type: "array",
             items: {

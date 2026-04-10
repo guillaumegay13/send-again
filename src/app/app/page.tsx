@@ -78,6 +78,7 @@ interface HistoryItem {
   recipient: string;
   subject: string;
   sentAt: string;
+  senderEmail: string | null;
   events: EmailEvent[];
 }
 
@@ -4931,7 +4932,14 @@ export default function ComposePage() {
                                 key={item.messageId}
                                 className="border-b border-gray-100 last:border-0 hover:bg-gray-50"
                               >
-                                <td className="px-3 py-2 font-mono text-sm">{item.recipient}</td>
+                                <td className="px-3 py-2">
+                                  <p className="font-mono text-sm">{item.recipient}</p>
+                                  {item.senderEmail ? (
+                                    <p className="mt-0.5 font-mono text-xs text-gray-500">
+                                      From {item.senderEmail}
+                                    </p>
+                                  ) : null}
+                                </td>
                                 <td className="max-w-xs truncate px-3 py-2 text-sm">
                                   {item.subject}
                                 </td>

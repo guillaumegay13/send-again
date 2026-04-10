@@ -1367,6 +1367,7 @@ export interface SendHistoryRow {
   recipient: string;
   subject: string;
   sent_at: string;
+  sender_email: string | null;
   events: string;
 }
 
@@ -1438,6 +1439,16 @@ interface SendRow {
   sent_at: string;
 }
 
+interface SendJobRecipientLookupRow {
+  message_id: string;
+  job_id: string | null;
+}
+
+interface SendJobPayloadLookupRow {
+  id: string;
+  payload: unknown;
+}
+
 interface SendMessageIdRow {
   message_id: string;
 }
@@ -1470,6 +1481,15 @@ function normalizeHistorySearch(value: unknown): string {
     .slice(0, 120)
     .replace(/[^a-zA-Z0-9@._+\-\s]/g, " ")
     .replace(/\s+/g, " ");
+}
+
+function getSendJobPayloadFromAddress(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+
+  const from = String((payload as Record<string, unknown>).from ?? "").trim();
+  return from || null;
 }
 
 function normalizeSubject(value: string | null): string {
@@ -1557,6 +1577,7 @@ export async function getSendHistory(
     string,
     Array<{ type: string; timestamp: string; detail: string }>
   >();
+  const senderEmailByMessageId = new Map<string, string>();
 
   for (const row of eventRows) {
     const list = eventsByMessageId.get(row.message_id) ?? [];
@@ -1568,12 +1589,57 @@ export async function getSendHistory(
     eventsByMessageId.set(row.message_id, list);
   }
 
+  const { data: recipientLookupData, error: recipientLookupError } = await db
+    .from("send_job_recipients")
+    .select("message_id, job_id")
+    .in("message_id", messageIds);
+  assertNoError(
+    recipientLookupError,
+    "Failed to fetch send job recipients for history"
+  );
+
+  const recipientLookupRows =
+    (recipientLookupData ?? []) as SendJobRecipientLookupRow[];
+  const jobIds = Array.from(
+    new Set(
+      recipientLookupRows
+        .map((row) => String(row.job_id ?? "").trim())
+        .filter(Boolean)
+    )
+  );
+
+  if (jobIds.length > 0) {
+    const { data: jobLookupData, error: jobLookupError } = await db
+      .from("send_jobs")
+      .select("id, payload")
+      .in("id", jobIds);
+    assertNoError(jobLookupError, "Failed to fetch send jobs for history");
+
+    const senderEmailByJobId = new Map<string, string>();
+    for (const row of (jobLookupData ?? []) as SendJobPayloadLookupRow[]) {
+      const senderEmail = getSendJobPayloadFromAddress(row.payload);
+      if (senderEmail) {
+        senderEmailByJobId.set(row.id, senderEmail);
+      }
+    }
+
+    for (const row of recipientLookupRows) {
+      const messageId = String(row.message_id ?? "").trim();
+      const jobId = String(row.job_id ?? "").trim();
+      const senderEmail = senderEmailByJobId.get(jobId);
+      if (messageId && senderEmail && !senderEmailByMessageId.has(messageId)) {
+        senderEmailByMessageId.set(messageId, senderEmail);
+      }
+    }
+  }
+
   return {
     rows: sends.map((send) => ({
       message_id: send.message_id,
       recipient: send.recipient,
       subject: send.subject ?? "",
       sent_at: send.sent_at,
+      sender_email: senderEmailByMessageId.get(send.message_id) ?? null,
       events: JSON.stringify(eventsByMessageId.get(send.message_id) ?? []),
     })),
     total,
