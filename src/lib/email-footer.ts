@@ -46,12 +46,14 @@ export function appendWorkspaceFooter({
   websiteUrl,
   workspaceId,
   unsubscribeUrl,
+  includeSendAgainFooter = true,
 }: {
   html: string;
   footerHtml: string;
   websiteUrl: string;
   workspaceId: string;
   unsubscribeUrl: string;
+  includeSendAgainFooter?: boolean;
 }): string {
   const normalizedWebsiteUrl = normalizeWebsiteUrl(websiteUrl, workspaceId);
   const customFooter = (footerHtml ?? "").trim();
@@ -59,5 +61,6 @@ export function appendWorkspaceFooter({
     .replace(/\{\{\s*unsubscribe_url\s*\}\}/gi, unsubscribeUrl)
     .replace(/\{\{\s*workspace_url\s*\}\}/gi, normalizedWebsiteUrl);
 
-  return appendFooterToHtml(html, `${renderedCustomFooter}${buildSendAgainFooter()}`);
+  const sendAgainPart = includeSendAgainFooter ? buildSendAgainFooter() : "";
+  return appendFooterToHtml(html, `${renderedCustomFooter}${sendAgainPart}`);
 }

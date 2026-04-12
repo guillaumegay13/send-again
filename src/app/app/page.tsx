@@ -1375,6 +1375,9 @@ export default function ComposePage() {
   );
   const [historyReuseLoadingMessageId, setHistoryReuseLoadingMessageId] =
     useState<string | null>(null);
+  const [historyExpandedId, setHistoryExpandedId] = useState<string | null>(null);
+  const [historyBodyCache, setHistoryBodyCache] = useState<Record<string, string>>({});
+  const [historyBodyLoading, setHistoryBodyLoading] = useState<string | null>(null);
   const [conditionMatchedRecipients, setConditionMatchedRecipients] = useState<
     string[]
   >([]);
@@ -1413,6 +1416,7 @@ export default function ComposePage() {
   const [subject, setSubject] = useState("");
   const [html, setHtml] = useState("");
   const [dryRun, setDryRun] = useState(true);
+  const [includeFooter, setIncludeFooter] = useState(true);
   const [sending, setSending] = useState(false);
   const [activeSendJobId, setActiveSendJobId] = useState<string | null>(null);
   const [activeSendJob, setActiveSendJob] = useState<SendJobStatusResponse | null>(
@@ -1784,6 +1788,8 @@ export default function ComposePage() {
       setHistorySearch("");
       setHistorySearchInput("");
       setHistoryView("activity");
+      setHistoryExpandedId(null);
+      setHistoryBodyCache({});
       setSubjectMetrics([]);
       setSubjectMetricsLoading(false);
       setSubjectMetricsError(null);
@@ -1896,6 +1902,8 @@ export default function ComposePage() {
     setHistorySearch("");
     setHistorySearchInput("");
     setHistoryView("activity");
+    setHistoryExpandedId(null);
+    setHistoryBodyCache({});
     setSubjectMetrics([]);
     setSubjectMetricsLoading(false);
     setSubjectMetricsError(null);
@@ -1959,6 +1967,7 @@ export default function ComposePage() {
     }
 
     setHistoryLoading(true);
+    setHistoryExpandedId(null);
     fetchJson<HistoryListResponse>(`/api/history?${params.toString()}`)
       .then((data) => {
         if (cancelled) return;
@@ -2548,6 +2557,8 @@ export default function ComposePage() {
     setHistorySearch("");
     setHistorySearchInput("");
     setHistoryView("activity");
+    setHistoryExpandedId(null);
+    setHistoryBodyCache({});
     setSubjectMetrics([]);
     setSubjectMetricsLoading(false);
     setSubjectMetricsError(null);
@@ -2783,6 +2794,8 @@ export default function ComposePage() {
 
     const prompt =
       target === "email" ? bodyVibePrompt.trim() : footerVibePrompt.trim();
+    const hasCurrentDraft =
+      target === "email" ? html.trim().length > 0 : workspace.footerHtml.trim().length > 0;
     if (!prompt) {
       if (target === "email") {
         setBodyVibeStatus("Write a prompt first.");
@@ -2816,10 +2829,10 @@ export default function ComposePage() {
 
       if (target === "email") {
         setHtml(data.html);
-        setBodyVibeStatus(`Updated by ${data.model}.`);
+        setBodyVibeStatus(`${hasCurrentDraft ? "Revised" : "Created"} by ${data.model}.`);
       } else {
         updateWorkspace({ footerHtml: data.html });
-        setFooterVibeStatus(`Updated by ${data.model}.`);
+        setFooterVibeStatus(`${hasCurrentDraft ? "Revised" : "Created"} by ${data.model}.`);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -3321,6 +3334,7 @@ export default function ComposePage() {
           websiteUrl: previewWebsiteUrl,
           workspaceId: previewWorkspaceId,
           unsubscribeUrl: previewUnsubscribeUrl,
+          includeSendAgainFooter: includeFooter,
         });
         const previewDoc = buildPreviewDocument(resolvedWithFooter);
         const res = await fetch("/api/preview", {
@@ -3337,7 +3351,7 @@ export default function ComposePage() {
         // preview failed silently
       }
     }, 300);
-  }, [workspace?.id, workspace?.websiteUrl, workspace?.footerHtml]);
+  }, [workspace?.id, workspace?.websiteUrl, workspace?.footerHtml, includeFooter]);
 
   const manualRecipients = uniqueEmails(
     to
@@ -3380,8 +3394,11 @@ export default function ComposePage() {
     websiteUrl: footerPreviewWebsiteUrl,
     workspaceId: footerPreviewWorkspaceId,
     unsubscribeUrl: footerPreviewUnsubscribeUrl,
+    includeSendAgainFooter: includeFooter,
   });
   const footerPreviewDoc = buildPreviewDocument(footerPreviewHtml);
+  const hasBodyDraft = html.trim().length > 0;
+  const hasFooterDraft = (workspace?.footerHtml ?? "").trim().length > 0;
 
   const sampleFieldsJson = JSON.stringify(sampleContact?.fields ?? {});
   useEffect(() => {
@@ -3425,6 +3442,7 @@ export default function ComposePage() {
           subject,
           html,
           dryRun,
+          includeFooter,
           configSet: workspace.configSet,
           rateLimit: workspace.rateLimit,
           footerHtml: workspace.footerHtml,
@@ -3459,6 +3477,31 @@ export default function ComposePage() {
     } catch (err) {
       setResult(`Error: ${err}`);
       setSending(false);
+    }
+  }
+
+  async function toggleHistoryBody(messageId: string) {
+    if (historyExpandedId === messageId) {
+      setHistoryExpandedId(null);
+      return;
+    }
+    setHistoryExpandedId(messageId);
+    if (historyBodyCache[messageId]) return;
+    if (!activeId) return;
+    setHistoryBodyLoading(messageId);
+    try {
+      const params = new URLSearchParams({ workspace: activeId, messageId });
+      const template = await fetchJson<ReusableSendTemplateResponse>(
+        `/api/history/template?${params.toString()}`
+      );
+      setHistoryBodyCache((prev) => ({ ...prev, [messageId]: template.html }));
+    } catch {
+      setHistoryBodyCache((prev) => ({
+        ...prev,
+        [messageId]: "<p style='color:#999;font-size:13px'>Could not load email body.</p>",
+      }));
+    } finally {
+      setHistoryBodyLoading((current) => (current === messageId ? null : current));
     }
   }
 
@@ -4147,13 +4190,17 @@ export default function ComposePage() {
               <div className="rounded border border-gray-200 bg-gray-50 p-3">
                 <p className="text-sm font-medium text-gray-700">Vibe Body</p>
                 <p className="mt-1 text-xs text-gray-500">
-                  Describe what to write or how to revise. Click again to iterate from current HTML.
+                  Describe what to write or how to revise. When the body already has HTML, follow-up prompts edit that draft instead of recreating it.
                 </p>
                 <textarea
                   value={bodyVibePrompt}
                   onChange={(e) => setBodyVibePrompt(e.target.value)}
                   rows={3}
-                  placeholder="Write a concise launch email for indie founders, warm tone, with one CTA button."
+                  placeholder={
+                    hasBodyDraft
+                      ? "Tighten the intro, keep the layout, and make the CTA button green."
+                      : "Write a concise launch email for indie founders, warm tone, with one CTA button."
+                  }
                   className="mt-2 w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black resize-y"
                 />
                 <div className="mt-2 flex items-center gap-3">
@@ -4163,7 +4210,13 @@ export default function ComposePage() {
                     disabled={bodyVibeBusy}
                     className="rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {bodyVibeBusy ? "Generating..." : "Generate Body HTML"}
+                    {bodyVibeBusy
+                      ? hasBodyDraft
+                        ? "Applying..."
+                        : "Generating..."
+                      : hasBodyDraft
+                        ? "Apply Body Edit"
+                        : "Generate Body HTML"}
                   </button>
                   {bodyVibeStatus && (
                     <span className="text-xs text-gray-500">{bodyVibeStatus}</span>
@@ -4200,27 +4253,55 @@ export default function ComposePage() {
                   </code>{" "}
                   to your footer if you want an unsubscribe link there.
                 </span>
+                <span className="text-xs text-gray-400">
+                  Manual edits here become the next Vibe starting point.
+                </span>
               </label>
 
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={dryRun}
-                  onClick={() => setDryRun(!dryRun)}
-                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
-                    dryRun ? "bg-black" : "bg-gray-300"
-                  }`}
-                >
-                  <span
-                    className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform transition-transform ${
-                      dryRun ? "translate-x-5" : "translate-x-0"
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={dryRun}
+                    onClick={() => setDryRun(!dryRun)}
+                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
+                      dryRun ? "bg-black" : "bg-gray-300"
                     }`}
-                  />
-                </button>
-                <span className="text-sm text-gray-600">
-                  Dry run {dryRun ? "(ON)" : "(OFF)"}
-                </span>
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform transition-transform ${
+                        dryRun ? "translate-x-5" : "translate-x-0"
+                      }`}
+                    />
+                  </button>
+                  <span className="text-sm text-gray-600">
+                    Dry run {dryRun ? "(ON)" : "(OFF)"}
+                  </span>
+                </div>
+
+                {billingStatus?.billingBypass && (
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={includeFooter}
+                      onClick={() => setIncludeFooter(!includeFooter)}
+                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
+                        includeFooter ? "bg-black" : "bg-gray-300"
+                      }`}
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform transition-transform ${
+                          includeFooter ? "translate-x-5" : "translate-x-0"
+                        }`}
+                      />
+                    </button>
+                    <span className="text-sm text-gray-600">
+                      Footer {includeFooter ? "(ON)" : "(OFF)"}
+                    </span>
+                  </div>
+                )}
               </div>
 
               <div className="text-xs text-gray-500">
@@ -4927,75 +5008,121 @@ export default function ComposePage() {
                         <tbody>
                           {historyRows.map((item) => {
                             const visibleEvents = getHistoryEventsForDisplay(item.events);
+                            const isExpanded = historyExpandedId === item.messageId;
                             return (
-                              <tr
-                                key={item.messageId}
-                                className="border-b border-gray-100 last:border-0 hover:bg-gray-50"
-                              >
-                                <td className="px-3 py-2">
-                                  <p className="font-mono text-sm">{item.recipient}</p>
-                                  {item.senderEmail ? (
-                                    <p className="mt-0.5 font-mono text-xs text-gray-500">
-                                      From {item.senderEmail}
-                                    </p>
-                                  ) : null}
-                                </td>
-                                <td className="max-w-xs truncate px-3 py-2 text-sm">
-                                  {item.subject}
-                                </td>
-                                <td className="whitespace-nowrap px-3 py-2 text-sm text-gray-500">
-                                  {formatTimestamp(item.sentAt)}
-                                </td>
-                                <td className="px-3 py-2">
-                                  <div className="flex flex-wrap gap-1">
-                                    {visibleEvents.map((event) => {
-                                      const meta = HISTORY_EVENT_META[event.type];
-                                      return (
-                                        <span
-                                          key={`${item.messageId}-${event.type}`}
-                                          title={formatHistoryEventTooltip(event)}
-                                          className={`inline-block rounded px-1.5 py-0.5 text-xs ${
-                                            meta?.className ?? "bg-gray-100 text-gray-600"
-                                          }`}
-                                        >
-                                          {meta?.label ?? event.type}
+                              <Fragment key={item.messageId}>
+                                <tr
+                                  onClick={() => toggleHistoryBody(item.messageId)}
+                                  className={`border-b border-gray-100 cursor-pointer hover:bg-gray-50 ${isExpanded ? "bg-gray-50" : ""}`}
+                                >
+                                  <td className="px-3 py-2">
+                                    <p className="font-mono text-sm">{item.recipient}</p>
+                                    {item.senderEmail ? (
+                                      <p className="mt-0.5 font-mono text-xs text-gray-500">
+                                        From {item.senderEmail}
+                                      </p>
+                                    ) : null}
+                                  </td>
+                                  <td className="max-w-xs truncate px-3 py-2 text-sm">
+                                    <span className="inline-flex items-center gap-1.5">
+                                      <svg
+                                        className={`h-3 w-3 flex-shrink-0 text-gray-400 transition-transform duration-150 ${isExpanded ? "rotate-90" : ""}`}
+                                        viewBox="0 0 20 20"
+                                        fill="currentColor"
+                                      >
+                                        <path
+                                          fillRule="evenodd"
+                                          d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z"
+                                          clipRule="evenodd"
+                                        />
+                                      </svg>
+                                      {item.subject}
+                                    </span>
+                                  </td>
+                                  <td className="whitespace-nowrap px-3 py-2 text-sm text-gray-500">
+                                    {formatTimestamp(item.sentAt)}
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <div className="flex flex-wrap gap-1">
+                                      {visibleEvents.map((event) => {
+                                        const meta = HISTORY_EVENT_META[event.type];
+                                        return (
+                                          <span
+                                            key={`${item.messageId}-${event.type}`}
+                                            title={formatHistoryEventTooltip(event)}
+                                            className={`inline-block rounded px-1.5 py-0.5 text-xs ${
+                                              meta?.className ?? "bg-gray-100 text-gray-600"
+                                            }`}
+                                          >
+                                            {meta?.label ?? event.type}
+                                          </span>
+                                        );
+                                      })}
+                                      {visibleEvents.length === 0 && (
+                                        <span className="inline-block rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-400">
+                                          Pending
                                         </span>
-                                      );
-                                    })}
-                                    {visibleEvents.length === 0 && (
-                                      <span className="inline-block rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-400">
-                                        Pending
-                                      </span>
+                                      )}
+                                    </div>
+                                    {visibleEvents.some(
+                                      (event) => event.detail.trim().length > 0
+                                    ) && (
+                                      <p className="mt-1 text-[11px] leading-snug text-gray-500">
+                                        {visibleEvents
+                                          .filter((event) => event.detail.trim().length > 0)
+                                          .map((event) => {
+                                            const label =
+                                              HISTORY_EVENT_META[event.type]?.label ?? event.type;
+                                            return `${label}: ${event.detail.trim()}`;
+                                          })
+                                          .join(" · ")}
+                                      </p>
                                     )}
-                                  </div>
-                                  {visibleEvents.some(
-                                    (event) => event.detail.trim().length > 0
-                                  ) && (
-                                    <p className="mt-1 text-[11px] leading-snug text-gray-500">
-                                      {visibleEvents
-                                        .filter((event) => event.detail.trim().length > 0)
-                                        .map((event) => {
-                                          const label =
-                                            HISTORY_EVENT_META[event.type]?.label ?? event.type;
-                                          return `${label}: ${event.detail.trim()}`;
-                                        })
-                                        .join(" · ")}
-                                    </p>
-                                  )}
-                                </td>
-                                <td className="px-3 py-2 text-right">
-                                  <button
-                                    type="button"
-                                    onClick={() => reuseHistoryItem(item)}
-                                    disabled={historyReuseLoadingMessageId === item.messageId}
-                                    className="rounded border border-gray-200 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-                                  >
-                                    {historyReuseLoadingMessageId === item.messageId
-                                      ? "Loading..."
-                                      : "Reuse"}
-                                  </button>
-                                </td>
-                              </tr>
+                                  </td>
+                                  <td className="px-3 py-2 text-right">
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        reuseHistoryItem(item);
+                                      }}
+                                      disabled={historyReuseLoadingMessageId === item.messageId}
+                                      className="rounded border border-gray-200 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                      {historyReuseLoadingMessageId === item.messageId
+                                        ? "Loading..."
+                                        : "Reuse"}
+                                    </button>
+                                  </td>
+                                </tr>
+                                {isExpanded && (
+                                  <tr className="border-b border-gray-100">
+                                    <td colSpan={5} className="px-3 py-3 bg-gray-50/50">
+                                      {historyBodyLoading === item.messageId ? (
+                                        <p className="text-xs text-gray-400 py-4 text-center">Loading email body...</p>
+                                      ) : historyBodyCache[item.messageId] ? (
+                                        <div className="rounded border border-gray-200 bg-white overflow-hidden">
+                                          <iframe
+                                            srcDoc={historyBodyCache[item.messageId]}
+                                            sandbox=""
+                                            className="w-full border-0"
+                                            style={{ height: "320px" }}
+                                            title={`Email body: ${item.subject}`}
+                                            onLoad={(e) => {
+                                              const frame = e.currentTarget;
+                                              const doc = frame.contentDocument;
+                                              if (doc?.body) {
+                                                const h = doc.body.scrollHeight;
+                                                frame.style.height = `${Math.min(Math.max(h + 16, 100), 600)}px`;
+                                              }
+                                            }}
+                                          />
+                                        </div>
+                                      ) : null}
+                                    </td>
+                                  </tr>
+                                )}
+                              </Fragment>
                             );
                           })}
                         </tbody>
@@ -5720,13 +5847,17 @@ export default function ComposePage() {
                   <div className="rounded border border-gray-200 bg-gray-50 p-3">
                     <p className="text-sm font-medium text-gray-700">Vibe Footer</p>
                     <p className="mt-1 text-xs text-gray-500">
-                      Describe the footer style or ask for edits. Each run updates the current footer.
+                      Describe the footer style or ask for edits. Once a footer exists, follow-up prompts revise that draft in place.
                     </p>
                     <textarea
                       value={footerVibePrompt}
                       onChange={(e) => setFooterVibePrompt(e.target.value)}
                       rows={3}
-                      placeholder="Create a clean minimal footer with brand tone and the links I need."
+                      placeholder={
+                        hasFooterDraft
+                          ? "Keep the links, tighten the copy, and add a lighter divider."
+                          : "Create a clean minimal footer with brand tone and the links I need."
+                      }
                       className="mt-2 w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black resize-y"
                     />
                     <div className="mt-2 flex items-center gap-3">
@@ -5736,7 +5867,13 @@ export default function ComposePage() {
                         disabled={footerVibeBusy}
                         className="rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        {footerVibeBusy ? "Generating..." : "Generate Footer HTML"}
+                        {footerVibeBusy
+                          ? hasFooterDraft
+                            ? "Applying..."
+                            : "Generating..."
+                          : hasFooterDraft
+                            ? "Apply Footer Edit"
+                            : "Generate Footer HTML"}
                       </button>
                       {footerVibeStatus && (
                         <span className="text-xs text-gray-500">{footerVibeStatus}</span>
@@ -5766,6 +5903,9 @@ export default function ComposePage() {
                       <code className="bg-gray-100 px-1 rounded">
                         {"{{workspace_url}}"}
                       </code>
+                    </span>
+                    <span className="text-xs text-gray-400">
+                      Manual footer edits also become the next Vibe starting point.
                     </span>
                   </label>
                 </div>

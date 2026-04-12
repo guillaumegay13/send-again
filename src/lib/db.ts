@@ -2165,6 +2165,7 @@ export interface SendJobPayload {
   websiteUrl: string;
   baseUrl: string;
   billingBypass: boolean;
+  includeFooter?: boolean;
 }
 
 export interface SendJobProgress {

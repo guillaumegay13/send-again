@@ -307,6 +307,7 @@ async function processSendJob(
             websiteUrl: context.payload.websiteUrl,
             workspaceId: context.workspaceId,
             unsubscribeUrl,
+            includeSendAgainFooter: context.payload.includeFooter !== false,
           });
 
           try {

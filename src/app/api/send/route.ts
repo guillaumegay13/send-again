@@ -33,6 +33,7 @@ interface SendBody {
   footerHtml: string;
   websiteUrl: string;
   sendAt: string | null;
+  includeFooter: boolean;
 }
 
 type RecipientMode =
@@ -128,6 +129,7 @@ function normalizeSendRequestBody(raw: unknown): SendBody {
   const configSet = getSesConfigurationSetName();
   const recipientMode = normalizeRecipientMode(body.recipientMode);
   const dryRun = typeof body.dryRun === "boolean" ? body.dryRun : false;
+  const includeFooter = typeof body.includeFooter === "boolean" ? body.includeFooter : true;
   const to = Array.isArray(body.to)
     ? (body.to.filter((value): value is string => typeof value === "string") as string[])
     : [];
@@ -146,6 +148,7 @@ function normalizeSendRequestBody(raw: unknown): SendBody {
     footerHtml,
     websiteUrl,
     sendAt,
+    includeFooter,
   };
 }
 
@@ -306,6 +309,8 @@ export async function POST(req: NextRequest) {
       process.env.NEXT_PUBLIC_APP_URL?.trim() ||
       req.nextUrl.origin;
 
+    const includeFooter = billingBypass ? body.includeFooter : true;
+
     const payload = {
       workspaceId,
       from: body.from,
@@ -318,6 +323,7 @@ export async function POST(req: NextRequest) {
       websiteUrl: body.websiteUrl,
       baseUrl,
       billingBypass,
+      includeFooter,
     };
 
     if (body.dryRun) {
