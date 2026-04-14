@@ -1,5 +1,5 @@
 export type ConditionMatchMode = "all" | "any";
-export type FieldOperator = "equals" | "notEquals" | "contains" | "notContains";
+export type FieldOperator = "equals" | "notEquals" | "contains" | "notContains" | "isEmpty" | "isNotEmpty";
 export type HistoryEventType =
   | "send"
   | "delivery"
@@ -87,6 +87,8 @@ export const FIELD_OPERATORS: Array<{ value: FieldOperator; label: string }> = [
   { value: "notEquals", label: "is not" },
   { value: "contains", label: "contains" },
   { value: "notContains", label: "does not contain" },
+  { value: "isEmpty", label: "is empty" },
+  { value: "isNotEmpty", label: "is not empty" },
 ];
 
 export const HISTORY_EVENTS: HistoryEventType[] = [
@@ -142,7 +144,9 @@ export function normalizeFieldOperator(value: unknown): FieldOperator {
     value === "equals" ||
     value === "notEquals" ||
     value === "contains" ||
-    value === "notContains"
+    value === "notContains" ||
+    value === "isEmpty" ||
+    value === "isNotEmpty"
   ) {
     return value;
   }

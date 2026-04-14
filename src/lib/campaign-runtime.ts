@@ -135,12 +135,20 @@ function evaluateFieldCondition(
   condition: FieldCondition
 ): boolean {
   if (!contact.hasContact) {
-    return false;
+    return condition.operator === "isEmpty";
   }
 
   const actual = normalizeFieldValue(contact.fields, condition.field)
     .trim()
     .toLowerCase();
+
+  if (condition.operator === "isEmpty") {
+    return actual === "";
+  }
+  if (condition.operator === "isNotEmpty") {
+    return actual !== "";
+  }
+
   const expected = condition.value.trim().toLowerCase();
 
   if (condition.operator === "equals") {

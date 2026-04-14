@@ -318,7 +318,7 @@ interface BillingCheckoutResponse {
 
 type DnsProvider = "manual" | "namecheap" | "cloudflare" | "route53";
 
-type FieldOperator = "equals" | "notEquals" | "contains" | "notContains";
+type FieldOperator = "equals" | "notEquals" | "contains" | "notContains" | "isEmpty" | "isNotEmpty";
 type ConditionMatchMode = "all" | "any";
 type HistoryEventType = "send" | "delivery" | "open" | "click" | "bounce" | "complaint";
 
@@ -612,6 +612,8 @@ const FIELD_OPERATORS: Array<{ value: FieldOperator; label: string }> = [
   { value: "notEquals", label: "is not" },
   { value: "contains", label: "contains" },
   { value: "notContains", label: "does not contain" },
+  { value: "isEmpty", label: "is empty" },
+  { value: "isNotEmpty", label: "is not empty" },
 ];
 
 const HISTORY_EVENTS: HistoryEventType[] = [
@@ -4083,19 +4085,21 @@ export default function ComposePage() {
                                 ))}
                               </div>
                             </label>
-                            <label className="flex flex-col gap-1">
-                              <span className="text-[11px] text-gray-500">Value</span>
-                              <input
-                                value={condition.value}
-                                onChange={(e) =>
-                                  setCondition(condition.id, {
-                                    value: e.target.value,
-                                  })
-                                }
-                                className="border border-gray-300 rounded px-2 py-1 text-sm"
-                                placeholder="true"
-                              />
-                            </label>
+                            {condition.operator !== "isEmpty" && condition.operator !== "isNotEmpty" && (
+                              <label className="flex flex-col gap-1">
+                                <span className="text-[11px] text-gray-500">Value</span>
+                                <input
+                                  value={condition.value}
+                                  onChange={(e) =>
+                                    setCondition(condition.id, {
+                                      value: e.target.value,
+                                    })
+                                  }
+                                  className="border border-gray-300 rounded px-2 py-1 text-sm"
+                                  placeholder="true"
+                                />
+                              </label>
+                            )}
                           </div>
                         ) : (
                           <div className="mt-2 grid sm:grid-cols-3 gap-2">
