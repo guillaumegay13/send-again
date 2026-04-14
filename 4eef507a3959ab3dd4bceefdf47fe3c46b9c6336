@@ -1,0 +1,53 @@
+src/lib/campaign-workflows.ts
+  70721889e99d1372 2,90-91,147-149
+src/lib/campaign-runtime.ts
+  70721889e99d1372 138,144-151
+src/app/app/page.tsx
+  70721889e99d1372 321,615-616,4088-4102
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "4eef507a3959ab3dd4bceefdf47fe3c46b9c6336",
+  "prompts": {
+    "246b1b221176c31d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5b059ae1-5d00-4105-842b-ffb91ef0e680",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Guillaume Gay",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 176,
+      "overriden_lines": 0
+    },
+    "70721889e99d1372": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b0384737-a919-402f-a662-47e3353ef652",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Guillaume Gay",
+      "messages": [],
+      "total_additions": 33,
+      "total_deletions": 17,
+      "accepted_lines": 33,
+      "overriden_lines": 0
+    },
+    "b5109a439ff4f320": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e1b6f773-c31f-42a2-9be2-fe7fe2694278",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Guillaume Gay",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    }
+  }
+}
