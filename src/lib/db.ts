@@ -461,6 +461,19 @@ export async function getPreferredWorkspaceUserId(
   return member?.user_id ?? null;
 }
 
+export async function getAuthUserEmailById(
+  userId: string
+): Promise<string | null> {
+  const normalizedUserId = userId.trim();
+  if (!normalizedUserId) return null;
+
+  const db = getDb();
+  const { data, error } = await db.auth.admin.getUserById(normalizedUserId);
+  assertNoError(error, "Failed to resolve auth user email");
+
+  return data.user?.email?.trim().toLowerCase() || null;
+}
+
 export async function deleteWorkspaceData(workspaceId: string): Promise<void> {
   const db = getDb();
   const pageSize = 1000;

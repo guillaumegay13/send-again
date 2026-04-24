@@ -1,6 +1,5 @@
 import { after, NextRequest, NextResponse } from "next/server";
-import { getPreferredWorkspaceUserId } from "@/lib/db";
-import { isBillingUnlimitedForUser } from "@/lib/billing";
+import { resolveWorkspaceBillingIdentity } from "@/lib/billing-auth";
 import { startCampaignRun } from "@/lib/campaign-runtime";
 import { drainBackgroundWork } from "@/lib/background-processors";
 import { apiErrorResponse, requireWorkspaceAuth } from "@/lib/auth";
@@ -34,10 +33,11 @@ export async function POST(
       );
     }
 
-    let userId = auth.userId ?? null;
-    if (!userId) {
-      userId = await getPreferredWorkspaceUserId(workspaceId);
-    }
+    const billingIdentity = await resolveWorkspaceBillingIdentity(
+      auth,
+      workspaceId
+    );
+    const userId = billingIdentity.userId;
     if (!userId) {
       return NextResponse.json(
         {
@@ -48,16 +48,11 @@ export async function POST(
       );
     }
 
-    const billingBypass = isBillingUnlimitedForUser({
-      userId,
-      email: auth.userEmail ?? null,
-    });
-
     const result = await startCampaignRun({
       workspaceId,
       campaignId: id,
       userId,
-      billingBypass,
+      billingBypass: billingIdentity.billingBypass,
     });
 
     after(async () => {

@@ -2,16 +2,15 @@ import { after, NextRequest, NextResponse } from "next/server";
 import {
   createSendJob,
   failSendJobWithMessage,
-  getPreferredWorkspaceUserId,
   getOrCreateWorkspaceBilling,
   getContacts,
   getUnsubscribedEmailSet,
   insertSendJobRecipients,
 } from "@/lib/db";
 import { apiErrorResponse, requireWorkspaceAuth } from "@/lib/auth";
+import { resolveWorkspaceBillingIdentity } from "@/lib/billing-auth";
 import {
   getInitialFreeCredits,
-  isBillingUnlimitedForUser,
   isBillingEnabled,
   isBillingEnforced,
 } from "@/lib/billing";
@@ -180,14 +179,11 @@ export async function POST(req: NextRequest) {
       "send.write"
     );
     const workspaceId = auth.workspace;
-    let preferredWorkspaceUserId: string | null = null;
-    if (!auth.userId) {
-      preferredWorkspaceUserId = await getPreferredWorkspaceUserId(workspaceId);
-    }
-    const billingBypass = isBillingUnlimitedForUser({
-      userId: auth.userId ?? preferredWorkspaceUserId,
-      email: auth.userEmail ?? null,
-    });
+    const billingIdentity = await resolveWorkspaceBillingIdentity(
+      auth,
+      workspaceId
+    );
+    const billingBypass = billingIdentity.billingBypass;
 
     if (
       auth.authMethod === "api_key" &&
@@ -339,7 +335,7 @@ export async function POST(req: NextRequest) {
     if (auth.userId) {
       jobUserId = auth.userId;
     } else {
-      const preferredUserId = preferredWorkspaceUserId;
+      const preferredUserId = billingIdentity.userId;
       if (!preferredUserId) {
         return NextResponse.json(
           {

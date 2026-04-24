@@ -2,14 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { apiErrorResponse, requireWorkspaceAuth } from "@/lib/auth";
 import {
   getOrCreateWorkspaceBilling,
-  getPreferredWorkspaceUserId,
   upsertWorkspaceBilling,
 } from "@/lib/db";
+import { resolveWorkspaceBillingIdentity } from "@/lib/billing-auth";
 import {
   billingStatusFromPolarSubscriptionStatus,
   getInitialFreeCredits,
   isBillingEnforced,
-  isBillingUnlimitedForUser,
 } from "@/lib/billing";
 import { getPolarCustomerStateByExternalId, isPolarConfigured } from "@/lib/polar";
 
@@ -37,20 +36,10 @@ export async function GET(req: NextRequest) {
 
     const auth = await requireWorkspaceAuth(req, workspaceParam, "send.read");
     const workspaceId = auth.workspace;
-    let billingBypass = isBillingUnlimitedForUser({
-      userId: auth.userId ?? null,
-      email: auth.userEmail ?? null,
-    });
-
-    if (!billingBypass && !auth.userId) {
-      const preferredWorkspaceUserId = await getPreferredWorkspaceUserId(
-        workspaceId
-      );
-      billingBypass = isBillingUnlimitedForUser({
-        userId: preferredWorkspaceUserId,
-        email: null,
-      });
-    }
+    const { billingBypass } = await resolveWorkspaceBillingIdentity(
+      auth,
+      workspaceId
+    );
 
     // Keep local DB status aligned with Polar when possible.
     if (isPolarConfigured()) {
