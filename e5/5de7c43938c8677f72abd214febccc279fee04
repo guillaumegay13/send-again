@@ -1,0 +1,21 @@
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "e55de7c43938c8677f72abd214febccc279fee04",
+  "prompts": {
+    "70721889e99d1372": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b0384737-a919-402f-a662-47e3353ef652",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Guillaume Gay",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    }
+  }
+}
