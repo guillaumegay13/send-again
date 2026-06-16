@@ -1431,6 +1431,16 @@ export default function ComposePage() {
   const [footerVibeBusy, setFooterVibeBusy] = useState(false);
   const [bodyVibeStatus, setBodyVibeStatus] = useState<string | null>(null);
   const [footerVibeStatus, setFooterVibeStatus] = useState<string | null>(null);
+  const [imageUploadBusy, setImageUploadBusy] = useState(false);
+  const [imageUploadError, setImageUploadError] = useState<string | null>(null);
+  const [uploadedImage, setUploadedImage] = useState<{
+    url: string;
+    tag: string;
+  } | null>(null);
+  const [copiedImageField, setCopiedImageField] = useState<
+    "tag" | "url" | null
+  >(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
   const [settingsSaveState, setSettingsSaveState] =
     useState<SettingsSaveState>("idle");
   const [settingsSaveMessage, setSettingsSaveMessage] = useState<string | null>(
@@ -2852,6 +2862,48 @@ export default function ComposePage() {
     }
   }
 
+  async function handleImageUpload(file: File) {
+    if (!sessionToken || !activeId) {
+      setImageUploadError("Select a workspace first.");
+      return;
+    }
+    setImageUploadBusy(true);
+    setImageUploadError(null);
+    setCopiedImageField(null);
+    try {
+      const form = new FormData();
+      form.append("workspaceId", activeId);
+      form.append("file", file);
+      const res = await authFetch("/api/images", {
+        method: "POST",
+        body: form,
+      });
+      const payload = (await res.json().catch(() => null)) as
+        | { url?: string; tag?: string; error?: string }
+        | null;
+      if (!res.ok || !payload?.url || !payload?.tag) {
+        throw new Error(payload?.error ?? `Upload failed (${res.status})`);
+      }
+      setUploadedImage({ url: payload.url, tag: payload.tag });
+    } catch (error) {
+      setImageUploadError(
+        error instanceof Error ? error.message : String(error)
+      );
+    } finally {
+      setImageUploadBusy(false);
+    }
+  }
+
+  async function copyImageValue(field: "tag" | "url", value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedImageField(field);
+      window.setTimeout(() => setCopiedImageField(null), 1500);
+    } catch {
+      setImageUploadError("Copy failed — select and copy manually.");
+    }
+  }
+
   function updateWorkspace(patch: Partial<Workspace>) {
     if (!activeId || !workspace || !sessionToken) return;
     const changed = Object.entries(patch).some(
@@ -4260,6 +4312,37 @@ export default function ComposePage() {
                 <span className="text-xs text-gray-400">
                   Manual edits here become the next Vibe starting point.
                 </span>
+                <div className="mt-1 flex items-center gap-3">
+                  <input
+                    ref={imageInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) handleImageUpload(file);
+                      e.target.value = "";
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => imageInputRef.current?.click()}
+                    disabled={imageUploadBusy || !activeId}
+                    className="rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {imageUploadBusy ? "Uploading..." : "Add image"}
+                  </button>
+                  <span className="text-xs text-gray-400">
+                    Uploads an image and gives you an{" "}
+                    <code className="bg-gray-100 px-1 rounded">{"<img>"}</code>{" "}
+                    tag to paste into the body.
+                  </span>
+                </div>
+                {imageUploadError && (
+                  <span className="text-xs text-red-600">
+                    {imageUploadError}
+                  </span>
+                )}
               </label>
 
               <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
@@ -6134,6 +6217,88 @@ export default function ComposePage() {
           </div>
         )}
       </div>
+
+      {uploadedImage && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="image-uploaded-title"
+            className="w-full max-w-lg rounded-lg bg-white shadow-xl"
+          >
+            <div className="border-b border-gray-200 px-5 py-4">
+              <h2
+                id="image-uploaded-title"
+                className="text-base font-semibold text-gray-900"
+              >
+                Image uploaded
+              </h2>
+              <p className="mt-1 text-xs text-gray-500">
+                Copy the tag and paste it into the body where you want the
+                image.
+              </p>
+            </div>
+
+            <div className="space-y-4 px-5 py-4">
+              <div className="flex justify-center rounded border border-gray-200 bg-gray-50 p-3">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={uploadedImage.url}
+                  alt="Uploaded preview"
+                  className="max-h-40 w-auto"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <span className="text-xs font-medium text-gray-600">
+                  HTML tag
+                </span>
+                <div className="flex items-stretch gap-2">
+                  <code className="flex-1 overflow-x-auto whitespace-nowrap rounded border border-gray-300 bg-gray-50 px-2 py-1.5 text-xs">
+                    {uploadedImage.tag}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() => copyImageValue("tag", uploadedImage.tag)}
+                    className="shrink-0 rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium hover:bg-gray-100"
+                  >
+                    {copiedImageField === "tag" ? "Copied!" : "Copy"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <span className="text-xs font-medium text-gray-600">URL</span>
+                <div className="flex items-stretch gap-2">
+                  <code className="flex-1 overflow-x-auto whitespace-nowrap rounded border border-gray-300 bg-gray-50 px-2 py-1.5 text-xs">
+                    {uploadedImage.url}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() => copyImageValue("url", uploadedImage.url)}
+                    className="shrink-0 rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium hover:bg-gray-100"
+                  >
+                    {copiedImageField === "url" ? "Copied!" : "Copy"}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end border-t border-gray-200 px-5 py-4">
+              <button
+                type="button"
+                onClick={() => {
+                  setUploadedImage(null);
+                  setCopiedImageField(null);
+                }}
+                className="rounded bg-black px-4 py-1.5 text-xs font-medium text-white hover:bg-gray-800"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {csvImportConfig && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6">
