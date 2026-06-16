@@ -1,0 +1,20 @@
+src/app/api/images/route.ts
+  s_9cd738104565cb::t_1819117fd7e89e 28-37
+  s_9cd738104565cb::t_1411aa76b65624 7-9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.7",
+  "base_commit_sha": "4c487d18b092e2277a24b3bd34b4ee0eed4a8427",
+  "prompts": {},
+  "sessions": {
+    "s_9cd738104565cb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a5a894f9-9be7-4dcb-a382-6d3ad01ec13f",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Guillaume Gay <guillaume.gay@protonmail.com>"
+    }
+  }
+}
