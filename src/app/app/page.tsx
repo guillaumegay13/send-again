@@ -1433,13 +1433,13 @@ export default function ComposePage() {
   const [footerVibeStatus, setFooterVibeStatus] = useState<string | null>(null);
   const [imageUploadBusy, setImageUploadBusy] = useState(false);
   const [imageUploadError, setImageUploadError] = useState<string | null>(null);
-  const [uploadedImage, setUploadedImage] = useState<{
-    url: string;
-    tag: string;
+  const [uploadedImages, setUploadedImages] = useState<
+    { url: string; tag: string }[]
+  >([]);
+  const [copiedImageField, setCopiedImageField] = useState<{
+    index: number;
+    field: "tag" | "url" | "all";
   } | null>(null);
-  const [copiedImageField, setCopiedImageField] = useState<
-    "tag" | "url" | null
-  >(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const [settingsSaveState, setSettingsSaveState] =
     useState<SettingsSaveState>("idle");
@@ -2862,29 +2862,65 @@ export default function ComposePage() {
     }
   }
 
-  async function handleImageUpload(file: File) {
+  async function uploadOneImage(
+    file: File,
+    workspaceId: string
+  ): Promise<{ url: string; tag: string }> {
+    const form = new FormData();
+    form.append("workspaceId", workspaceId);
+    form.append("file", file);
+    const res = await authFetch("/api/images", {
+      method: "POST",
+      body: form,
+    });
+    const payload = (await res.json().catch(() => null)) as
+      | { url?: string; tag?: string; error?: string }
+      | null;
+    if (!res.ok || !payload?.url || !payload?.tag) {
+      throw new Error(payload?.error ?? `Upload failed (${res.status})`);
+    }
+    return { url: payload.url, tag: payload.tag };
+  }
+
+  async function handleImageUpload(files: File[]) {
     if (!sessionToken || !activeId) {
       setImageUploadError("Select a workspace first.");
       return;
     }
+    if (files.length === 0) return;
     setImageUploadBusy(true);
     setImageUploadError(null);
     setCopiedImageField(null);
     try {
-      const form = new FormData();
-      form.append("workspaceId", activeId);
-      form.append("file", file);
-      const res = await authFetch("/api/images", {
-        method: "POST",
-        body: form,
-      });
-      const payload = (await res.json().catch(() => null)) as
-        | { url?: string; tag?: string; error?: string }
-        | null;
-      if (!res.ok || !payload?.url || !payload?.tag) {
-        throw new Error(payload?.error ?? `Upload failed (${res.status})`);
+      const results = await Promise.allSettled(
+        files.map((file) => uploadOneImage(file, activeId))
+      );
+      const uploaded = results
+        .filter(
+          (r): r is PromiseFulfilledResult<{ url: string; tag: string }> =>
+            r.status === "fulfilled"
+        )
+        .map((r) => r.value);
+      const failures = results
+        .map((r, i) => ({ r, name: files[i].name }))
+        .filter((x) => x.r.status === "rejected")
+        .map(
+          ({ r, name }) =>
+            `${name} — ${
+              (r as PromiseRejectedResult).reason instanceof Error
+                ? (r as PromiseRejectedResult).reason.message
+                : String((r as PromiseRejectedResult).reason)
+            }`
+        );
+
+      if (uploaded.length > 0) {
+        setUploadedImages(uploaded);
       }
-      setUploadedImage({ url: payload.url, tag: payload.tag });
+      if (failures.length > 0) {
+        setImageUploadError(
+          `${failures.length} of ${files.length} failed: ${failures.join("; ")}`
+        );
+      }
     } catch (error) {
       setImageUploadError(
         error instanceof Error ? error.message : String(error)
@@ -2894,10 +2930,14 @@ export default function ComposePage() {
     }
   }
 
-  async function copyImageValue(field: "tag" | "url", value: string) {
+  async function copyImageValue(
+    index: number,
+    field: "tag" | "url" | "all",
+    value: string
+  ) {
     try {
       await navigator.clipboard.writeText(value);
-      setCopiedImageField(field);
+      setCopiedImageField({ index, field });
       window.setTimeout(() => setCopiedImageField(null), 1500);
     } catch {
       setImageUploadError("Copy failed — select and copy manually.");
@@ -4316,11 +4356,12 @@ export default function ComposePage() {
                   <input
                     ref={imageInputRef}
                     type="file"
+                    multiple
                     accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml"
                     className="hidden"
                     onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) handleImageUpload(file);
+                      const files = Array.from(e.target.files ?? []);
+                      if (files.length > 0) handleImageUpload(files);
                       e.target.value = "";
                     }}
                   />
@@ -4333,9 +4374,9 @@ export default function ComposePage() {
                     {imageUploadBusy ? "Uploading..." : "Add image"}
                   </button>
                   <span className="text-xs text-gray-400">
-                    Uploads an image and gives you an{" "}
+                    Uploads one or more images and gives you an{" "}
                     <code className="bg-gray-100 px-1 rounded">{"<img>"}</code>{" "}
-                    tag to paste into the body.
+                    tag for each to paste into the body.
                   </span>
                 </div>
                 {imageUploadError && (
@@ -6218,77 +6259,112 @@ export default function ComposePage() {
         )}
       </div>
 
-      {uploadedImage && (
+      {uploadedImages.length > 0 && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6">
           <div
             role="dialog"
             aria-modal="true"
             aria-labelledby="image-uploaded-title"
-            className="w-full max-w-lg rounded-lg bg-white shadow-xl"
+            className="flex max-h-[90vh] w-full max-w-lg flex-col rounded-lg bg-white shadow-xl"
           >
             <div className="border-b border-gray-200 px-5 py-4">
               <h2
                 id="image-uploaded-title"
                 className="text-base font-semibold text-gray-900"
               >
-                Image uploaded
+                {uploadedImages.length === 1
+                  ? "Image uploaded"
+                  : `${uploadedImages.length} images uploaded`}
               </h2>
               <p className="mt-1 text-xs text-gray-500">
-                Copy the tag and paste it into the body where you want the
-                image.
+                Copy a tag and paste it into the body where you want the image.
               </p>
             </div>
 
-            <div className="space-y-4 px-5 py-4">
-              <div className="flex justify-center rounded border border-gray-200 bg-gray-50 p-3">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={uploadedImage.url}
-                  alt="Uploaded preview"
-                  className="max-h-40 w-auto"
-                />
-              </div>
+            <div className="flex-1 space-y-6 overflow-y-auto px-5 py-4">
+              {uploadedImages.map((image, index) => (
+                <div
+                  key={image.url}
+                  className="space-y-4 border-b border-gray-100 pb-6 last:border-b-0 last:pb-0"
+                >
+                  <div className="flex justify-center rounded border border-gray-200 bg-gray-50 p-3">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={image.url}
+                      alt="Uploaded preview"
+                      className="max-h-40 w-auto"
+                    />
+                  </div>
 
-              <div className="space-y-1">
-                <span className="text-xs font-medium text-gray-600">
-                  HTML tag
-                </span>
-                <div className="flex items-stretch gap-2">
-                  <code className="flex-1 overflow-x-auto whitespace-nowrap rounded border border-gray-300 bg-gray-50 px-2 py-1.5 text-xs">
-                    {uploadedImage.tag}
-                  </code>
-                  <button
-                    type="button"
-                    onClick={() => copyImageValue("tag", uploadedImage.tag)}
-                    className="shrink-0 rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium hover:bg-gray-100"
-                  >
-                    {copiedImageField === "tag" ? "Copied!" : "Copy"}
-                  </button>
-                </div>
-              </div>
+                  <div className="space-y-1">
+                    <span className="text-xs font-medium text-gray-600">
+                      HTML tag
+                    </span>
+                    <div className="flex items-stretch gap-2">
+                      <code className="flex-1 overflow-x-auto whitespace-nowrap rounded border border-gray-300 bg-gray-50 px-2 py-1.5 text-xs">
+                        {image.tag}
+                      </code>
+                      <button
+                        type="button"
+                        onClick={() => copyImageValue(index, "tag", image.tag)}
+                        className="shrink-0 rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium hover:bg-gray-100"
+                      >
+                        {copiedImageField?.index === index &&
+                        copiedImageField.field === "tag"
+                          ? "Copied!"
+                          : "Copy"}
+                      </button>
+                    </div>
+                  </div>
 
-              <div className="space-y-1">
-                <span className="text-xs font-medium text-gray-600">URL</span>
-                <div className="flex items-stretch gap-2">
-                  <code className="flex-1 overflow-x-auto whitespace-nowrap rounded border border-gray-300 bg-gray-50 px-2 py-1.5 text-xs">
-                    {uploadedImage.url}
-                  </code>
-                  <button
-                    type="button"
-                    onClick={() => copyImageValue("url", uploadedImage.url)}
-                    className="shrink-0 rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium hover:bg-gray-100"
-                  >
-                    {copiedImageField === "url" ? "Copied!" : "Copy"}
-                  </button>
+                  <div className="space-y-1">
+                    <span className="text-xs font-medium text-gray-600">
+                      URL
+                    </span>
+                    <div className="flex items-stretch gap-2">
+                      <code className="flex-1 overflow-x-auto whitespace-nowrap rounded border border-gray-300 bg-gray-50 px-2 py-1.5 text-xs">
+                        {image.url}
+                      </code>
+                      <button
+                        type="button"
+                        onClick={() => copyImageValue(index, "url", image.url)}
+                        className="shrink-0 rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium hover:bg-gray-100"
+                      >
+                        {copiedImageField?.index === index &&
+                        copiedImageField.field === "url"
+                          ? "Copied!"
+                          : "Copy"}
+                      </button>
+                    </div>
+                  </div>
                 </div>
-              </div>
+              ))}
             </div>
 
-            <div className="flex justify-end border-t border-gray-200 px-5 py-4">
+            <div className="flex justify-between gap-2 border-t border-gray-200 px-5 py-4">
+              {uploadedImages.length > 1 ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    copyImageValue(
+                      -1,
+                      "all",
+                      uploadedImages.map((image) => image.tag).join("\n")
+                    )
+                  }
+                  className="rounded border border-gray-300 bg-white px-4 py-1.5 text-xs font-medium hover:bg-gray-100"
+                >
+                  {copiedImageField?.field === "all"
+                    ? "Copied all tags!"
+                    : "Copy all tags"}
+                </button>
+              ) : (
+                <span />
+              )}
               <button
                 type="button"
                 onClick={() => {
-                  setUploadedImage(null);
+                  setUploadedImages([]);
                   setCopiedImageField(null);
                 }}
                 className="rounded bg-black px-4 py-1.5 text-xs font-medium text-white hover:bg-gray-800"
