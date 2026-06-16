@@ -4,6 +4,9 @@ import { getDb } from "@/lib/db";
 
 const BUCKET = "email-images";
 const MAX_BYTES = 5 * 1024 * 1024; // keep in sync with the bucket's file_size_limit
+// Reject before parsing the body. Allow some headroom over MAX_BYTES for
+// multipart boundaries and the workspaceId field.
+const MAX_REQUEST_BYTES = MAX_BYTES + 1024 * 1024;
 const ALLOWED_TYPES = new Set([
   "image/png",
   "image/jpeg",
@@ -22,6 +25,16 @@ const EXT_BY_TYPE: Record<string, string> = {
 
 export async function POST(req: NextRequest) {
   try {
+    // Reject oversized payloads up front so we don't buffer the whole body
+    // into memory before the per-file size check below.
+    const contentLength = Number(req.headers.get("content-length"));
+    if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BYTES) {
+      return NextResponse.json(
+        { error: "Image is too large (max 5MB)" },
+        { status: 413 }
+      );
+    }
+
     const form = await req.formData();
     const workspaceId = String(form.get("workspaceId") ?? "")
       .trim()
